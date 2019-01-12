@@ -13,6 +13,9 @@
 #include <cmath>
 #include <unordered_map>
 
+using namespace std::chrono;
+static duration<double, std::milli> stepTime_;
+
 // --------------------------------------------------------------------
 // Between [0,1]
 float rand01()
@@ -184,6 +187,8 @@ IndexType indexsp( 4093, r, true );
 // --------------------------------------------------------------------
 void step()
 {
+	high_resolution_clock::time_point start = high_resolution_clock::now();
+
     // UPDATE
     // This modified verlet integrator has dt = 1 and calculates the velocity
     // For later use in the simulation.
@@ -378,6 +383,8 @@ void step()
             }
         }
     }
+
+	stepTime_ = high_resolution_clock::now() - start;
 }
 
 // --------------------------------------------------------------------
@@ -534,6 +541,7 @@ int main( int argc, char** argv )
         for( size_t i = 0; i < stepsPerFrame; ++i )
         {
             step();
+			std::cout << "\r  " << stepTime_.count() << "ms" << std::flush;
         }
 
         glfwSwapBuffers( window );
