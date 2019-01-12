@@ -42,16 +42,16 @@ struct Particle
     glm::vec2 pos;
     float r, g, b;
 
-    glm::vec2 pos_old;
+    glm::vec2 pos_old; // for verlet?
     glm::vec2 vel;
     glm::vec2 force;
     float mass;
-    float rho;
-    float rho_near;
+    float rho; // density
+    float rho_near; // ?
     float press;
     float press_near;
-    float sigma;
-    float beta;
+    float sigma; // ?
+    float beta; // ?
     std::vector< Neighbor > neighbors;
 };
 
@@ -59,7 +59,7 @@ struct Particle
 std::vector< Particle > particles;
 
 // --------------------------------------------------------------------
-const float G = .02f * .25;           // Gravitational Constant for our simulation
+const float G = .0f;// .02f * .25;           // Gravitational Constant for our simulation
 const float spacing = 2.f;            // Spacing of particles
 const float k = spacing / 1000.0f;    // Far pressure weight
 const float k_near = k * 10;          // Near pressure weight
@@ -75,7 +75,7 @@ void init( const unsigned int N )
     // Initialize particles
     // We will make a block of particles with a total width of 1/4 of the screen.
     float w = SIM_W / 4;
-    for( float y = bottom + 1; y <= 10000; y += r * 0.5f )
+    for( float y = bottom + w; y <= w+w*2.f; y += r * 0.5f )
     {
         for(float x = -w; x <= w; x += r * 0.5f )
         {
