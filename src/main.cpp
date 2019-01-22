@@ -1,11 +1,12 @@
 // Real-Time Physics Tutorials
 // Brandon Pelfrey
 // SPH Fluid Simulation
-#include <glad/glad.h>
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+
 #include <glm/glm.hpp>
 #include <omp.h>
+
+#include <gl-windows.h>
+
 #include <chrono>
 #include <iostream>
 #include <fstream>
@@ -388,37 +389,8 @@ void step()
 }
 
 // --------------------------------------------------------------------
-void display( GLFWwindow* window )
-{
-    glClearColor( 0, 0, 0, 1 );
-    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
-
-    int w, h;
-    glfwGetWindowSize( window, &w, &h );
-    glViewport( 0, 0, w, h ); 
-
-    // create a world with dimensions x:[-SIM_W,SIM_W] and y:[0,SIM_W*2]
-    glMatrixMode( GL_PROJECTION );
-    glLoadIdentity();
-    const double ar = w / static_cast< double >( h );
-    glOrtho( ar * -SIM_W, ar * SIM_W, 0, 2*SIM_W, -1, 1 );
-
-    glMatrixMode( GL_MODELVIEW );
-    glLoadIdentity();
-
-    // Draw Fluid Particles
-    glPointSize( r*2 );
-    glVertexPointer( 2, GL_FLOAT, sizeof(Particle), &particles[0].pos );
-    glColorPointer( 3, GL_FLOAT, sizeof(Particle), &particles[0].r );
-    glEnableClientState( GL_VERTEX_ARRAY );
-    glEnableClientState( GL_COLOR_ARRAY );
-    glDrawArrays( GL_POINTS, 0, particles.size() );
-    glDisableClientState( GL_VERTEX_ARRAY );
-    glDisableClientState( GL_COLOR_ARRAY );
-}
-
-// --------------------------------------------------------------------
 unsigned int stepsPerFrame = 1;
+/*
 void keyboard( GLFWwindow* window, int key, int scancode, int action, int mods )
 {
     if( action == GLFW_PRESS )
@@ -463,32 +435,7 @@ void keyboard( GLFWwindow* window, int key, int scancode, int action, int mods )
         break;
     }
 }
-
-// --------------------------------------------------------------------
-void motion( GLFWwindow* window, double xpos, double ypos )
-{
-    // This simply updates the location of the mouse attractor.
-    int window_w, window_h;
-    glfwGetWindowSize( window, &window_w, &window_h ); 
-    float relx = (float)(xpos - window_w/2) / window_w;
-    float rely = -(float)(ypos - window_h) / window_h;
-    glm::vec2 mouse = glm::vec2(relx*SIM_W*2, rely*SIM_W*2);
-    attractor = mouse;
-}
-
-// --------------------------------------------------------------------
-void mouse( GLFWwindow* window, int button, int action, int mods )
-{
-    if( action == GLFW_PRESS )
-    {
-        attracting = true;
-    }
-    else
-    {
-        attracting = false;
-        attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
-    }
-}
+*/
 
 // --------------------------------------------------------------------
 int main( int argc, char** argv )
@@ -521,33 +468,40 @@ int main( int argc, char** argv )
 #else
     init( 2048 );
 
-    glfwInit();
-    GLFWwindow* window = glfwCreateWindow( 512, 512, "SPH", NULL, NULL );
-    glfwMakeContextCurrent( window );
-    gladLoadGLLoader( (GLADloadproc)glfwGetProcAddress );
+	uint64_t gdiContext, glContext;
+	createGLContexts(&gdiContext, &glContext);
 
-    glfwSwapInterval( 1 );
+	GLVertexHandle points;
+	createGLPoints2D(particles.size() * sizeof(Particle), &points, particles.data(), sizeof(Particle));
 
-    glfwSetKeyCallback( window, keyboard );
-    glfwSetCursorPosCallback( window, motion );
-    glfwSetMouseButtonCallback( window, mouse );
+	openGLWindowAndREPL();
+	unsigned int mouse[2]; bool mouseDown; char pressedKey;
+	while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
+		
+		unsigned int window[2]; getGLWindowSize(window);
 
-    while( !glfwWindowShouldClose( window ) )
-    {
-        display( window );
+		//printf("mouse=%d,%d   mouseDown=%d   pressedKey=%c\n\n", mouse[0], mouse[1], mouseDown, pressedKey);
+		if (attracting = mouseDown) {
+			float relx = (float)((int)mouse[0] - (int)window[0] / 2) / (int)window[0];
+			float rely = -(float)((int)mouse[1] - (int)window[1]) / (int)window[1];
+			attractor = glm::vec2(relx*SIM_W * 2, rely*SIM_W * 2);
+		} else {
+			attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
+		}
 
-        glfwPollEvents();
+		runGLShader(points, /*scale=*/1.0f / SIM_W, 1.0f / SIM_W, /*translation=*/0, -1.0f);
 
-        for( size_t i = 0; i < stepsPerFrame; ++i )
-        {
-            step();
-			std::cout << "\r  " << stepTime_.count() << "ms" << std::flush;
-        }
+		for (size_t i = 0; i < stepsPerFrame; ++i)
+		{
+			step();
+		}
 
-        glfwSwapBuffers( window );
-    }
+		updateGLPoints2D(points, particles.size() * sizeof(Particle), particles.data(), sizeof(Particle));
 
-    glfwTerminate();
+		swapGLBuffers(60);
+
+	}
+	closeGLWindowAndREPL();
     return 0;
 #endif
 }
