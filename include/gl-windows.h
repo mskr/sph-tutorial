@@ -23,7 +23,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data = 0, s
 /**
 *
 */
-void updateGLPoints2D(GLVertexHandle handle, size_t bytes, void* data, size_t stride = 0);
+void updateGLVertexData(GLVertexHandle handle, size_t bytes, void* data);
 
 /**
 *

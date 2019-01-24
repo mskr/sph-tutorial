@@ -647,7 +647,14 @@ void createGLTriangles2D(size_t bytes, void* outBuffer, void* data) {
 void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, size_t stride) {
 	assert(initialized_);
 
-	fragmentShaderSource_ += "  color = vec4(1);\n";
+	// Fake sphere normal and diffuse lighting
+	fragmentShaderSource_ += "  vec3 normal = vec3(0, 0, 0);\n";
+	fragmentShaderSource_ += "  normal.xy = gl_PointCoord * 2.0 - vec2(1.0);\n";
+	fragmentShaderSource_ += "  float mag = dot(normal.xy, normal.xy);\n";
+	fragmentShaderSource_ += "  if (mag > 1.0) discard; // kill pixels outside circle\n";
+	fragmentShaderSource_ += "  normal.z = sqrt(1.0 - mag);\n";
+	fragmentShaderSource_ += "  color = vec4( vec3( dot(normalize(normal), vec3(0,0,1)) ), 1.0 );\n";
+	fragmentShaderSource_ += "  gl_FragDepth = 1.0-normal.z;\n";
 
 	GLuint vao = 0;
 	glGenVertexArrays(1, &vao);
@@ -656,7 +663,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, size_
 	GLuint vbo = 0;
 	glGenBuffers(1, &vbo);
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, bytes, data, GL_DYNAMIC_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, bytes, data, GL_STATIC_DRAW);
 
 	// Assume every vertex is 2 floats and no extra data
 	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, 0);
@@ -669,6 +676,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, size_
 	else currentVertexCount_ = (GLsizei)bytes / (2 * sizeof(float));
 
 	currentPrimitive_ = GL_POINTS;
+	glPointSize(20.0f);
 
 	*outHandle = { vbo, vao };
 }
@@ -676,7 +684,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, size_
 /**
 *
 */
-void updateGLPoints2D(GLVertexHandle handle, size_t bytes, void* data, size_t stride) {
+void updateGLVertexData(GLVertexHandle handle, size_t bytes, void* data) {
 	glBindBuffer(GL_ARRAY_BUFFER, handle.vbo);
 	glBufferData(GL_ARRAY_BUFFER, bytes, data, GL_DYNAMIC_DRAW);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -784,12 +792,11 @@ void createGLImage(int w, int h, void* outImageHandle, void* data) {
 *
 */
 void runGLShader(GLVertexHandle handle, float scaleX, float scaleY, float translationX, float translationY) {
-	if (handle.vao < 0) handle.vao = vao_;
 
 	hotreloadGLShader();
 
 	// Vertex array
-	glBindVertexArray(handle.vao);
+	glBindVertexArray(handle.vao ? handle.vao : vao_);
 
 	// Triangle operations
 	glFrontFace(GL_CCW);
@@ -798,6 +805,10 @@ void runGLShader(GLVertexHandle handle, float scaleX, float scaleY, float transl
 
 	// Shader
 	glUseProgram(shaderProgram_);
+
+	// Vertex transform
+	glUniform2f(42, scaleX, scaleY);
+	glUniform2f(43, translationX, translationY);
 
 	// Textures
 	for (int i = 0; i < imageCount_; i++) {
@@ -811,24 +822,20 @@ void runGLShader(GLVertexHandle handle, float scaleX, float scaleY, float transl
 		// but GL forbids to render with this state.
 	}
 
-	glUniform2f(42, scaleX, scaleY);
-	glUniform2f(43, translationX, translationY);
-
 	// Viewport
 	glViewport(0, 0, width_, height_);
 
 	// Framebuffer
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glClear(GL_COLOR_BUFFER_BIT);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	// Pixel operations
-	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS);
 	glEnable(GL_BLEND);
 	// Incoming colors are scaled with their opacity (alpha) and added 
 	// to framebuffer colors that are scaled with the transparency (1-alpha)
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-	glPointSize(2.0f);
 
 	high_resolution_clock::time_point start = high_resolution_clock::now();
 
