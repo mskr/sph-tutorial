@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <fstream>
 
 const char* glerr2str(GLenum errorCode) {
 	switch(errorCode) {
@@ -49,8 +50,8 @@ const char* glerr2str(GLenum errorCode) {
 static bool initialized_ = false;
 
 // Holds initial window size
-static unsigned int width_ = 500;
-static unsigned int height_ = 500;
+static unsigned int width_ = 1000;
+static unsigned int height_ = 1000;
 
 // Holds mouse coords in pixels, origin = top left
 static unsigned int mouse_[2];
@@ -105,7 +106,8 @@ struct ViewState {
 	GLuint shaderProgram_ = 0;
 
 	// Holds declarations of currently added buffers, samplers etc.
-	std::string glslUniformString_ = "";
+	std::string glslUniformString_ = 
+"layout(location=44) uniform vec2 px;\n";
 
 	// Holds fragment shader code, that can be extended via input at runtime
 	std::string fragmentShaderSource_ =
@@ -222,13 +224,15 @@ static void createGLFramebuffer(GLuint* f) {
 	GL(TexParameteri, GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	GL(TexParameteri, GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
-	// Analog for the depth texture
 	if (v->imageOffset_ < 0) v->imageOffset_ = imageCount_;
 	imageCount_++; v->imageCount_++;
+
+	// Analog for the depth texture
 	const std::string nameD = "view" + std::to_string(activeView_ - 1) + "_depth";
 	const std::string countStrD = std::to_string(imageCount_);
 	v->glslUniformString_ += "layout(location = " + countStrD + ") uniform sampler2D " + nameD + ";\n";
 	GL(ActiveTexture, GL_TEXTURE0 + imageCount_);
+
 	imageCount_++; v->imageCount_++;
 
 	// Attach z buffer texture (R32F)
@@ -633,6 +637,10 @@ static void runREPL() {
 	while (!isRunning_) {
 		//do nothing, thread is not meant to start yet
 	}
+
+	// Need non-processed input mode to be able to handle CTRL+X events
+	SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS);
+
 	ViewState* v = &viewStates_[activeView_];
 	printREPLIntro();
 	std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_;
@@ -669,43 +677,86 @@ static void runREPL() {
 			INPUT_RECORD buf[128]; DWORD readCount;
 			if (ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), buf, 128, &readCount)) {
 				for (DWORD i = 0; i < readCount; i++)  {
-		            if (buf[i].EventType == KEY_EVENT) {
-		            	if (buf[i].Event.KeyEvent.bKeyDown) {
+					if (buf[i].EventType != KEY_EVENT) continue;
+					if (!buf[i].Event.KeyEvent.bKeyDown) continue;
+					const KEY_EVENT_RECORD ev = buf[i].Event.KeyEvent;
 
-		                    char c = buf[i].Event.KeyEvent.uChar.AsciiChar;
-		                    if (c == '\r' || c == '\n') { // enter
-		                    	if (in.size() > 0) {
-									v->fragmentShaderSourceTmp_ = v->fragmentShaderSource_ + "  " + in + '\n';
-									inputThreadFlag_ = true;
-									in = "";
-								}
-								std::cout << '\n';
-		                    } else if (c == 8) { // backspace
-		                    	if (in.size() > 0) {
-		                    		std::string whitespace(in.size(), ' ');
-		                    		std::cout << '\r' << "  " << whitespace << std::flush;
-		                    		in.resize(in.size() - 1);
-		                    		std::cout << '\r' << "  " << in << std::flush;
-		                    	}
-		                    } else if (c >= 32 && c <= 126) { // printable
-		                    	if (in.size() == 0) std::cout << "\n  " << std::flush;
-		                    	in += c;
-		                    	std::cout << c;
-		                    }
-		                    if (buf[i].Event.KeyEvent.wVirtualKeyCode == 27) { // escape
-		                    	isRunning_ = false;
-		                    	break;
-		                    }
-
-							WORD vk = buf[i].Event.KeyEvent.wVirtualKeyCode;
-							if (vk == VK_PRIOR) {
-								activeView_ = (activeView_ + 1) % viewStates_.size();
-							}
-							else if (vk == VK_NEXT) {
-								activeView_ = (activeView_ == 0 ? viewStates_.size() - 1 : activeView_ - 1) % viewStates_.size();
-							}
+		            char c = ev.uChar.AsciiChar;
+		            if (c == '\r' || c == '\n') { // enter
+		                if (in.size() > 0) {
+							v->fragmentShaderSourceTmp_ = v->fragmentShaderSource_ + "  " + in + '\n';
+							inputThreadFlag_ = true;
+							in = "";
+						}
+						std::cout << '\n';
+		            } else if (c == 8) { // backspace
+		                if (in.size() > 0) {
+		                    std::string whitespace(in.size(), ' ');
+		                    std::cout << '\r' << "  " << whitespace << std::flush;
+		                    in.resize(in.size() - 1);
+		                    std::cout << '\r' << "  " << in << std::flush;
 		                }
+		            } else if (c >= 32 && c <= 126) { // printable
+		                if (in.size() == 0) std::cout << "\n  " << std::flush;
+		                in += c;
+		                std::cout << c;
 		            }
+					WORD vk = ev.wVirtualKeyCode;
+		            if (vk == 27) { // escape
+		                isRunning_ = false;
+		                break;
+		            }
+					if (vk == VK_PRIOR) { // PAGEUP
+						activeView_ = (activeView_ + 1) % viewStates_.size();
+					}
+					else if (vk == VK_NEXT) { // PAGEDOWN
+						activeView_ = (activeView_ == 0 ? viewStates_.size() - 1 : activeView_ - 1) % viewStates_.size();
+					}
+					if ((ev.dwControlKeyState & LEFT_CTRL_PRESSED) == LEFT_CTRL_PRESSED) {
+						if (vk == 'S' || vk == 'O') {
+							char filename[MAX_PATH];
+							OPENFILENAME ofn;
+							ZeroMemory(&filename, sizeof(filename));
+							ZeroMemory(&ofn, sizeof(ofn));
+							ofn.lStructSize = sizeof(ofn);
+							ofn.hwndOwner = NULL;  // If you have a window to center over, put its HANDLE here
+							ofn.lpstrFilter = "GLSL Fragment Shader\0*.frag\0Any File\0*.*\0";
+							ofn.lpstrFile = filename;
+							ofn.nMaxFile = MAX_PATH;
+							ofn.Flags = OFN_DONTADDTORECENT | OFN_FILEMUSTEXIST;
+							if (vk == 'S') {
+								ofn.lpstrTitle = "Save your shader";
+								if (GetSaveFileNameA(&ofn)) { // opens Windows dialog and blocks
+									std::ofstream outfile(filename);
+									const auto frag = glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}";
+									outfile.write(frag.c_str(), frag.length());
+									std::cout << "\n\n  [SAVED " << filename << "]\n\n";
+									in = ""; // discard unfinished input
+								}
+							}
+							else if (vk == 'O') {
+								ofn.lpstrTitle = "Load your shader";
+								if (GetOpenFileNameA(&ofn)) {
+									std::ifstream infile(filename);
+									std::string source;
+									bool begin = false;
+									for (std::string line; std::getline(infile, line);) {
+										if (line[0] == '#') continue;
+										else if (line[0] == '}') continue;
+										else if (line.substr(0, 3) == "in ") begin = true;
+										if (begin) source += line + '\n';
+									}
+									v->fragmentShaderSourceTmp_ = source;
+									inputThreadFlag_ = true;
+									clearConsole();
+									printREPLIntro();
+									std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSourceTmp_;
+									std::cout << "\n  [LOADED " << filename << "]\n\n";
+									in = ""; // discard unfinished input
+								}
+							}
+						}
+					}
 		        }
 			}
 		}
@@ -995,10 +1046,6 @@ static void runGLShader_internal(ViewState* v) {
 	hotreloadGLShader();
 	GL(UseProgram, v->shaderProgram_);
 
-	// Vertex transform
-	GL(Uniform2f, 42, v->vertexScale_[0], v->vertexScale_[1]);
-	GL(Uniform2f, 43, v->vertexTranslation_[0], v->vertexTranslation_[1]);
-
 	// Textures
 	for (int i = v->imageOffset_; i < v->imageOffset_ + v->imageCount_; i++) {
 		// Select all targets (2D,3D,etc.) under unit i.
@@ -1010,6 +1057,13 @@ static void runGLShader_internal(ViewState* v) {
 		// It is possible to bind textures to different targets in one unit,
 		// but GL forbids to render with this state.
 	}
+
+	// Vertex transform
+	GL(Uniform2f, 42, v->vertexScale_[0], v->vertexScale_[1]);
+	GL(Uniform2f, 43, v->vertexTranslation_[0], v->vertexTranslation_[1]);
+
+	// Pixel size
+	GL(Uniform2f, 44, 2.0f / width_, 2.0f / height_);
 
 	// Viewport
 	glViewport(0, 0, width_, height_);
