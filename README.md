@@ -25,7 +25,7 @@ You can use the [`OMP_NUM_THREADS` environment variable](https://gcc.gnu.org/onl
 
 ##### Building
 
-Appropriate versions of GLFW and GLM are included as submodules so you should be able to clone and build without anything more than CMake and a compiler:
+The repo is self-contained, so you should be able to clone and build without anything more than CMake and a compiler:
 
     git clone https://github.com/genpfault/sph-tutorial.git
     cd sph-tutorial
@@ -34,3 +34,10 @@ Appropriate versions of GLFW and GLM are included as submodules so you should be
     cd build
     cmake ../ -DCMAKE_BUILD_TYPE=RelWithDebInfo
     cmake --build .
+
+
+##### Devlog by mskr
+
+I wanted to develop my own particle-based real-time fluid simulation in order to try building new interactive experiences with formable, mixable materials and unified physics. I also try to turn this vague and broad goal somehow into a workable topic for my master thesis in media informatics. So I forked this repo to quickly get started.
+
+I was positively surprised how easy it was to build and to see beautiful animations. Because I am only motivated by graphical results, I began plugging in my GL renderer with shaders (which works only in Windows). Next I wanted to see, if I can improve the surface reconstruction and rendering of the fluid. Popular methods seem to be Curvature Flow and Ellipsoid Point Splatting, of which I added the original papers to the repo.
