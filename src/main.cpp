@@ -5,14 +5,19 @@
 #include <glm/glm.hpp>
 #include <omp.h>
 
-#include <gl-windows.h>
-
 #include <chrono>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <cmath>
 #include <unordered_map>
+#include <string>
+#include <direct.h> // _getcwd
+
+#include <gl-windows.h>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 using namespace std::chrono;
 static duration<double, std::milli> stepTime_;
@@ -388,54 +393,6 @@ void step()
 	stepTime_ = high_resolution_clock::now() - start;
 }
 
-// --------------------------------------------------------------------
-unsigned int stepsPerFrame = 1;
-/*
-void keyboard( GLFWwindow* window, int key, int scancode, int action, int mods )
-{
-    if( action == GLFW_PRESS )
-    {
-        return;
-    }
-
-    const float radius = SIM_W / 8;
-    switch( key )
-    {
-    case GLFW_KEY_ESCAPE:
-    case GLFW_KEY_Q:
-        glfwSetWindowShouldClose( window, 1 );
-        break;
-    case GLFW_KEY_SPACE:
-        // add some particles.
-        for( float y = SIM_W * 2 - radius; y <= SIM_W * 2 + radius; y += r * .5f )
-        {
-            for( float x = -radius; x <= radius; x += r * .5f )
-            {
-                Particle p;
-                p.pos = p.pos_old = glm::vec2(x , y) + glm::vec2(rand01(), rand01());
-                p.force = glm::vec2(0,0);
-                p.sigma = 3.f;
-                p.beta = 4.f;
-
-                const glm::vec2 temp( p.pos - glm::vec2( 0, SIM_W * 2 ) );
-                if( glm::dot( temp, temp ) < radius * radius )
-                {
-                    particles.push_back(p);
-                }
-            }
-        }
-        break;
-    case GLFW_KEY_MINUS:
-    case GLFW_KEY_KP_SUBTRACT:
-        if( stepsPerFrame > 1 ) stepsPerFrame--;
-        break;
-    case GLFW_KEY_EQUAL:
-    case GLFW_KEY_KP_ADD:
-        stepsPerFrame++;
-        break;
-    }
-}
-*/
 
 // --------------------------------------------------------------------
 int main( int argc, char** argv )
@@ -471,8 +428,22 @@ int main( int argc, char** argv )
 	uint64_t gdiContext, glContext;
 	createGLContexts(&gdiContext, &glContext);
 
-	GLVertexHandle points;
-	createGLPoints2D(particles.size() * sizeof(Particle), &points, particles.data(), sizeof(Particle));
+	char cwd[256];
+	_getcwd(cwd, 256);
+	int width, height, bpp;
+	unsigned char* rgb = stbi_load((std::string(cwd) + "/../img/cobble.jpg").c_str(), &width, &height, &bpp, 3);
+	assert(rgb);
+	unsigned int img = 0; createGLImage(width, height, &img, rgb, 3);
+	stbi_image_free(rgb);
+
+	pushGLView(/*scale=*/1.0f / SIM_W, 1.0f / SIM_W, /*translation=*/0, -1.0f);
+
+	GLVertexHandle verts;
+	createGLPoints2D(particles.size() * sizeof(Particle), &verts, particles.data(), sizeof(Particle));
+
+	pushGLView();
+
+	createGLQuad();
 
 	openGLWindowAndREPL();
 	unsigned int mouse[2]; bool mouseDown; char pressedKey;
@@ -489,14 +460,11 @@ int main( int argc, char** argv )
 			attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
 		}
 
-		runGLShader(points, /*scale=*/1.0f / SIM_W, 1.0f / SIM_W, /*translation=*/0, -1.0f);
+		runGLShader();
 
-		for (size_t i = 0; i < stepsPerFrame; ++i)
-		{
-			step();
-		}
+		step();
 
-		updateGLPoints2D(points, particles.size() * sizeof(Particle), particles.data(), sizeof(Particle));
+		updateGLVertexData(verts, particles.size() * sizeof(Particle), particles.data());
 
 		swapGLBuffers(60);
 
