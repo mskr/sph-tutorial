@@ -46,6 +46,8 @@ const char* glerr2str(GLenum errorCode) {
 #define GL(opname, ...) gl ## opname (__VA_ARGS__); { GLenum e = glGetError(); if (e!=GL_NO_ERROR) { \
 	printf("%s %s %s %s %d %s %s\n", glerr2str(e), "returned by", #opname, "at line", __LINE__, "in file", __FILE__); } }
 
+static float identity_[4][4] = { { 1,0,0,0 },{ 0,1,0,0 },{ 0,0,1,0 },{ 0,0,0,1 } };
+
 // Holds if GL is enabled through createGLContexts
 static bool initialized_ = false;
 
@@ -70,11 +72,10 @@ static const std::string glslVersionString_ = "#version 430\n";
 // Holds constant vertex shader source
 static const std::string vertexShaderSource_ = glslVersionString_ +
 "layout(location = 0) in vec2 pos;\
-layout(location=42) uniform vec2 scale = vec2(1);\
-layout(location=43) uniform vec2 translation = vec2(0);\
+layout(location=42) uniform mat4 PROJ = mat4(1);\
 out vec2 p;\
 void main() {\
-	gl_Position = vec4(pos*scale+translation, 0, 1);\
+	gl_Position = PROJ * vec4(pos, 0, 1);\
 	p = pos;\
 }";
 
@@ -90,12 +91,15 @@ static std::thread inputThread(runREPL);
 // Holds number of images added through createGLImage or createGLFramebuffer, maps directly to used texture units
 static unsigned int imageCount_ = 0;
 
+static const float pointSize_ = 40.f;
+
 /**
 * ViewState is an internal management structure to enable multiple views in the GL window.
 * Views can be switched with PAGE[UP/DOWN] keys. This will also change the current shader in the console.
 * A stack model is implemented, so that a view can access the view below via shader textures.
-* This works by rendering the lower view into an offscreen framebuffer in first pass, and current view in second pass.
-* Use pushGLView() followed by createGLQuad() to e.g. postprocess underlying view in shader of new view.
+* The idea is that each view depends on the underlying view to build its frame.
+* Therefore when viewing the top most image, the whole stack is rendered from bottom up step by step using offscreen framebuffers.
+* Simple use case: Use pushGLView() followed by createGLQuad() to postprocess underlying view in shader of new view.
 */
 struct ViewState {
 	GLuint vao_ = 0;
@@ -107,7 +111,10 @@ struct ViewState {
 
 	// Holds declarations of currently added buffers, samplers etc.
 	std::string glslUniformString_ = 
-"layout(location=44) uniform vec2 px;\n";
+"layout(location=42) uniform mat4 PROJ = mat4(1);\n\
+layout(location=43) uniform vec2 PX;\n\
+layout(location=44) uniform float POINT_SIZE;\n\
+layout(location=45) uniform float DELTA_T = 0.005;\n";
 
 	// Holds fragment shader code, that can be extended via input at runtime
 	std::string fragmentShaderSource_ =
@@ -130,8 +137,7 @@ void main() {\n\
 	// Holds current drawing primitive
 	GLenum currentPrimitive_ = GL_TRIANGLES;
 
-	float vertexScale_[2] = { 1.0f, 1.0f };
-	float vertexTranslation_[2] = { 0.0f, 0.0f };
+	float* projection_ = 0;
 
 	GLuint framebuffer_;
 
@@ -203,7 +209,7 @@ static void createGLFramebuffer(GLuint* f) {
 	ViewState* v = &viewStates_[activeView_];
 
 	// Add shader code to access the texture later
-	const std::string name = "view" + std::to_string(activeView_ - 1);
+	const std::string name = "COLORMAP";
 	const std::string countStr = std::to_string(imageCount_);
 	v->glslUniformString_ += "layout(location = " + countStr + ") uniform sampler2D " + name + ";\n";
 	GL(ActiveTexture, GL_TEXTURE0 + imageCount_);
@@ -228,7 +234,7 @@ static void createGLFramebuffer(GLuint* f) {
 	imageCount_++; v->imageCount_++;
 
 	// Analog for the depth texture
-	const std::string nameD = "view" + std::to_string(activeView_ - 1) + "_depth";
+	const std::string nameD = "DEPTHMAP";
 	const std::string countStrD = std::to_string(imageCount_);
 	v->glslUniformString_ += "layout(location = " + countStrD + ") uniform sampler2D " + nameD + ";\n";
 	GL(ActiveTexture, GL_TEXTURE0 + imageCount_);
@@ -642,6 +648,7 @@ static void runREPL() {
 	SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS);
 
 	ViewState* v = &viewStates_[activeView_];
+	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 	printREPLIntro();
 	std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_;
 	std::cout << "  " << std::flush; // indentation
@@ -654,6 +661,7 @@ static void runREPL() {
 			prevActiveView_ = activeView_;
 			v = &viewStates_[activeView_];
 			clearConsole();
+			SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 			printREPLIntro();
 			std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_;
 			std::cout << "  " << in << std::flush; // indentation
@@ -662,11 +670,11 @@ static void runREPL() {
 
 		if (in.size() == 0) {
 			duration<double> sec = std::chrono::high_resolution_clock::now() - launchTime_;
+			SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY);
 			std::cout 
 				<< "\r  [View " << activeView_ << ", "
 				<< "Shadertime: " << std::fixed << std::setprecision(3) << shaderTime_.count() << "ms, "
 				<< "Frametime: " << std::fixed << std::setprecision(3) << frameTime_.count() << "ms, "
-				<< std::fixed << std::setprecision(3) << (frameCount_/sec.count()) << "avgFPS, "
 				<< (v->currentPrimitive_ == GL_TRIANGLES ? v->currentVertexCount_/3 : v->currentVertexCount_)
 				<< (v->currentPrimitive_ == GL_TRIANGLES ? " Tris]" : "Points]") << std::flush;
 		}
@@ -699,6 +707,7 @@ static void runREPL() {
 		            } else if (c >= 32 && c <= 126) { // printable
 		                if (in.size() == 0) std::cout << "\n  " << std::flush;
 		                in += c;
+						SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 		                std::cout << c;
 		            }
 					WORD vk = ev.wVirtualKeyCode;
@@ -707,10 +716,10 @@ static void runREPL() {
 		                break;
 		            }
 					if (vk == VK_PRIOR) { // PAGEUP
-						activeView_ = (activeView_ + 1) % viewStates_.size();
+						PostMessageA(windowHandle_, WM_KEYDOWN, VK_PRIOR, 0);
 					}
 					else if (vk == VK_NEXT) { // PAGEDOWN
-						activeView_ = (activeView_ == 0 ? viewStates_.size() - 1 : activeView_ - 1) % viewStates_.size();
+						PostMessageA(windowHandle_, WM_KEYDOWN, VK_NEXT, 0);
 					}
 					if ((ev.dwControlKeyState & LEFT_CTRL_PRESSED) == LEFT_CTRL_PRESSED) {
 						if (vk == 'S' || vk == 'O') {
@@ -730,7 +739,8 @@ static void runREPL() {
 									std::ofstream outfile(filename);
 									const auto frag = glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}";
 									outfile.write(frag.c_str(), frag.length());
-									std::cout << "\n\n  [SAVED " << filename << "]\n\n";
+									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN);
+									std::cout << "\n  [SAVED " << filename << "]\n";
 									in = ""; // discard unfinished input
 								}
 							}
@@ -739,19 +749,22 @@ static void runREPL() {
 								if (GetOpenFileNameA(&ofn)) {
 									std::ifstream infile(filename);
 									std::string source;
-									bool begin = false;
+									bool begin = false, inMain = false;
 									for (std::string line; std::getline(infile, line);) {
 										if (line[0] == '#') continue;
-										else if (line[0] == '}') continue;
 										else if (line.substr(0, 3) == "in ") begin = true;
+										else if (line.substr(0, 9) == "void main") inMain = true;
+										else if (line[0] == '}' && inMain) break;
 										if (begin) source += line + '\n';
 									}
+									clearConsole();
+									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+									printREPLIntro();
+									std::cout << glslVersionString_ + v->glslUniformString_ + source;
+									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN);
+									std::cout << "  [LOADED " << filename << "]\n";
 									v->fragmentShaderSourceTmp_ = source;
 									inputThreadFlag_ = true;
-									clearConsole();
-									printREPLIntro();
-									std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSourceTmp_;
-									std::cout << "\n  [LOADED " << filename << "]\n\n";
 									in = ""; // discard unfinished input
 								}
 							}
@@ -862,7 +875,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 	v->fragmentShaderSource_ += "  if (mag > 1.0) discard; // kill pixels outside circle\n";
 	v->fragmentShaderSource_ += "  normal.z = sqrt(1.0 - mag);\n";
 	v->fragmentShaderSource_ += "  color = vec4( vec3( dot(normalize(normal), vec3(0,0,1)) ), 1.0 );\n";
-	v->fragmentShaderSource_ += "  gl_FragDepth = 1.0-normal.z;\n";
+	v->fragmentShaderSource_ += "  gl_FragDepth = (1.0-normal.z) * POINT_SIZE * .5;\n";
 
 	GLuint vao = 0;
 	glGenVertexArrays(1, &vao);
@@ -884,10 +897,18 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 	else v->currentVertexCount_ = (GLsizei)bytes / (2 * sizeof(float));
 
 	v->currentPrimitive_ = GL_POINTS;
-	glPointSize(20.0f);
+	glPointSize(pointSize_);
 
 	v->vao_ = vao;
 	*outHandle = { vbo, vao };
+}
+
+/**
+*
+*/
+void createGLPointSprites2D(size_t bytes, GLVertexHandle* outHandle, void* data, int stride) {
+	assert(initialized_);
+	//TODO if we want correct 3D perspective on particles we should create quads for each here (and also in update)
 }
 
 /**
@@ -1017,12 +1038,11 @@ void createGLImage(int w, int h, void* outImageHandle, void* data, int channels)
 /**
 *
 */
-void pushGLView(float scaleX, float scaleY, float translationX, float translationY) {
+void pushGLView(float* proj) {
 
 	activeView_ = viewStates_.size();
 	ViewState view;
-	view.vertexScale_[0] = scaleX, view.vertexScale_[1] = scaleY;
-	view.vertexTranslation_[0] = translationX, view.vertexTranslation_[1] = translationY;
+	view.projection_ = proj;
 	viewStates_.push_back(view);
 
 	// Create framebuffer for lower view so that its textures can be accessed by new view
@@ -1059,11 +1079,12 @@ static void runGLShader_internal(ViewState* v) {
 	}
 
 	// Vertex transform
-	GL(Uniform2f, 42, v->vertexScale_[0], v->vertexScale_[1]);
-	GL(Uniform2f, 43, v->vertexTranslation_[0], v->vertexTranslation_[1]);
+	GL(UniformMatrix4fv, 42, 1, GL_TRUE, v->projection_ ? v->projection_ : &identity_[0][0]);
 
 	// Pixel size
-	GL(Uniform2f, 44, 2.0f / width_, 2.0f / height_);
+	GL(Uniform2f, 43, 2.0f / width_, 2.0f / height_);
+	GL(Uniform1f, 44, 2.0f / pointSize_);
+	GL(Uniform1f, 45, frameTime_.count()/1000.f);
 
 	// Viewport
 	glViewport(0, 0, width_, height_);
@@ -1079,24 +1100,22 @@ static void runGLShader_internal(ViewState* v) {
 	// to framebuffer colors that are scaled with the transparency (1-alpha)
 	GL(BlendFunc, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	high_resolution_clock::time_point start = high_resolution_clock::now();
-
 	GL(DrawArrays, v->currentPrimitive_, 0, v->currentVertexCount_);
-
-	shaderTime_ = high_resolution_clock::now() - start;
 }
 
 /**
 *
 */
 void runGLShader() {
-	// First write lower view into offscreen framebuffer
-	if (activeView_ > 0) {
-		GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[activeView_-1].framebuffer_);
-		runGLShader_internal(&viewStates_[activeView_-1]);
+	// Render view stack from bottom up to active view
+	for (unsigned int i = 0; i < activeView_; i++) {
+		GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[i].framebuffer_);
+		runGLShader_internal(&viewStates_[i]);
 	}
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	high_resolution_clock::time_point start = high_resolution_clock::now();
 	runGLShader_internal(&viewStates_[activeView_]);
+	shaderTime_ = high_resolution_clock::now() - start;
 }
 
 /**

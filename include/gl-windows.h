@@ -68,4 +68,4 @@ void getGLWindowSize(unsigned int* s);
 /**
 *
 */
-void pushGLView(float scaleX = 1, float scaleY = 1, float translationX = 0, float translationY = 0);
+void pushGLView(float* proj = 0);
