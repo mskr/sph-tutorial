@@ -68,7 +68,7 @@ struct Particle
 std::vector< Particle > particles;
 
 // --------------------------------------------------------------------
-const float G = .0f;// .02f * .25;           // Gravitational Constant for our simulation
+const float G = .02f * .25;           // Gravitational Constant for our simulation
 const float spacing = 2.f;            // Spacing of particles
 const float k = spacing / 1000.0f;    // Far pressure weight
 const float k_near = k * 10;          // Near pressure weight
@@ -423,6 +423,18 @@ int main( int argc, char** argv )
 
     return 0;
 #else
+
+	//TODO Can we simulate porous materials like sand or soil with this? Which parameters have to be altered?
+
+	//TODO Try solid material with very strong springs forces. Then implement melting.
+
+	//TODO Timeline seeking (use ImgGUI)
+
+
+
+
+	//TODO after curvature flow: attempt to draw a line around silhouette, i.e. level set boundary
+
     init( 2048 );
 
 	uint64_t gdiContext, glContext;
@@ -436,10 +448,23 @@ int main( int argc, char** argv )
 	unsigned int img = 0; createGLImage(width, height, &img, rgb, 3);
 	stbi_image_free(rgb);
 
-	pushGLView(/*scale=*/1.0f / SIM_W, 1.0f / SIM_W, /*translation=*/0, -1.0f);
+	float proj[4][4]{ { 1.f / SIM_W, 0, 0, 0 }, { 0, 1.f / SIM_W, 0, -1.f }, { 0, 0, 1.f, 0 }, { 0, 0, 0, 1.f } };
+	pushGLView(&proj[0][0]);
 
 	GLVertexHandle verts;
 	createGLPoints2D(particles.size() * sizeof(Particle), &verts, particles.data(), sizeof(Particle));
+
+	pushGLView();
+
+	createGLQuad();
+
+	pushGLView();
+
+	createGLQuad();
+
+	pushGLView();
+
+	createGLQuad();
 
 	pushGLView();
 
