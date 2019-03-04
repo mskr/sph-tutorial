@@ -46,9 +46,18 @@ void openGLWindowAndREPL();
 bool processWindowsMessage(unsigned int* mouse = 0, bool* mouseDown = 0, char* pressedKey = 0);
 
 /**
+* Acts as ImGui float slider and shader uniform
+*/
+struct GLShaderParam {
+	const char* name = 0;
+	float* ptr = 0;
+	float minVal = .0f, maxVal = 1.f;
+};
+
+/**
 *
 */
-void runGLShader();
+void runGLShader(GLShaderParam slot1 = GLShaderParam(), GLShaderParam slot2 = GLShaderParam(), GLShaderParam slot3 = GLShaderParam());
 
 /**
 *

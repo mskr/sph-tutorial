@@ -114,6 +114,8 @@ struct ViewState {
 	GLuint shaderProgram_ = 0;
 
 	// Holds declarations of currently added buffers, samplers etc.
+	// Uniform locations use range that doesnt collide with buffers.
+	// Max locations must be at least 1024 per GL spec.
 	std::string glslUniformString_ = 
 "layout(location=42) uniform mat4 PROJ = mat4(1);\n\
 layout(location=43) uniform vec2 PX;\n\
@@ -1063,7 +1065,7 @@ void pushGLView(float* proj) {
 /**
 *
 */
-static void runGLShader_internal(ViewState* v) {
+static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* uniformSlot2, float* uniformSlot3) {
 
 	// Vertex array
 	GL(BindVertexArray, v->vao_);
@@ -1094,8 +1096,17 @@ static void runGLShader_internal(ViewState* v) {
 
 	// Pixel size
 	GL(Uniform2f, 43, 2.0f / width_, 2.0f / height_);
+
+	// Point size
 	GL(Uniform1f, 44, 2.0f / pointSize_);
+
+	// Frame time
 	GL(Uniform1f, 45, frameTime_.count()/1000.f);
+
+	// Other parameters
+	if (uniformSlot1) GL(Uniform1f, 142, *uniformSlot1);
+	if (uniformSlot2) GL(Uniform1f, 143, *uniformSlot2);
+	if (uniformSlot3) GL(Uniform1f, 144, *uniformSlot3);
 
 	// Viewport
 	glViewport(0, 0, width_, height_);
@@ -1117,31 +1128,62 @@ static void runGLShader_internal(ViewState* v) {
 /**
 *
 */
-void runGLShader() {
+void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) {
+
+	// Inside render loop, but before first render add parameters as uniforms to shader code
+	static bool firstTime = true;
+	if (firstTime) {
+		for (int i = 0; i < viewStates_.size(); i++) {
+			ViewState* v = &viewStates_[i];
+			if (slot1.name) {
+				v->glslUniformString_ += "layout(location=142) uniform float ";
+				v->glslUniformString_ += slot1.name;
+				v->glslUniformString_ += ";\n";
+			}
+			if (slot2.name) {
+				v->glslUniformString_ += "layout(location=143) uniform float ";
+				v->glslUniformString_ += slot2.name;
+				v->glslUniformString_ += ";\n";
+			}
+			if (slot3.name) {
+				v->glslUniformString_ += "layout(location=144) uniform float ";
+				v->glslUniformString_ += slot3.name;
+				v->glslUniformString_ += ";\n";
+			}
+			assert(compileGLShader(vertexShaderSource_,
+				glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
+				&v->vertexShader_, &v->fragmentShader_));
+			v->shaderProgram_ = glCreateProgram();
+			glAttachShader(v->shaderProgram_, v->fragmentShader_);
+			glAttachShader(v->shaderProgram_, v->vertexShader_);
+			glLinkProgram(v->shaderProgram_);
+		}
+		firstTime = false;
+	}
+
 
 	// Render view stack from bottom up to active view
 	for (unsigned int i = 0; i < activeView_; i++) {
 		GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[i].framebuffer_);
-		runGLShader_internal(&viewStates_[i]);
+		runGLShader_internal(&viewStates_[i], slot1.ptr, slot2.ptr, slot3.ptr);
 	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
 	high_resolution_clock::time_point start = high_resolution_clock::now();
-	runGLShader_internal(&viewStates_[activeView_]);
+	runGLShader_internal(&viewStates_[activeView_], slot1.ptr, slot2.ptr, slot3.ptr);
 	shaderTime_ = high_resolution_clock::now() - start;
 
 
-	// Render ImGui
+	// Render sliders for params with ImGui
 	ImGui_ImplOpenGL3_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();
 
 	if (ImGui::BeginMainMenuBar()) {
-		static float f = 0.5f;
-		static bool b = true;
-		ImGui::SliderFloat("Value", &f, 0.0f, 1.0f);
-		ImGui::Checkbox("Check", &b);
+		if (slot1.name) ImGui::SliderFloat(slot1.name, slot1.ptr, slot1.minVal, slot1.maxVal);
+		if (slot2.name) ImGui::SliderFloat(slot2.name, slot2.ptr, slot2.minVal, slot2.maxVal);
+		if (slot3.name) ImGui::SliderFloat(slot3.name, slot3.ptr, slot3.minVal, slot3.maxVal);
 		ImGui::EndMainMenuBar();
 	}
 
@@ -1232,6 +1274,7 @@ void openGLWindowAndREPL() {
 
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
+	ImGui::GetStyle().Alpha = .75f;
 
 	// Setup Platform/Renderer bindings
 	ImGui_ImplWin32_Init(windowHandle_);

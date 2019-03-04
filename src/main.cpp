@@ -470,6 +470,8 @@ int main( int argc, char** argv )
 
 	createGLQuad();
 
+	float curvatureFlowFactor = .001f; ;
+
 	openGLWindowAndREPL();
 	unsigned int mouse[2]; bool mouseDown; char pressedKey;
 	while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
@@ -485,7 +487,7 @@ int main( int argc, char** argv )
 			attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
 		}
 
-		runGLShader();
+		runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor });
 
 		step();
 
