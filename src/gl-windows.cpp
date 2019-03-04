@@ -647,6 +647,52 @@ static void printREPLIntro() {
 }
 
 /**
+*
+*/
+static std::string getLineFromEnd(std::string s, unsigned int l, bool* isOutOfBounds = 0) {
+	if (s.empty()) return "";
+	std::string result;
+	unsigned int current = 0;
+	unsigned int i;
+	for (i = s.length() - 1; i > 0; i--) {
+		if (s[i] == '\n') {
+			if (i > 0 && s[i - 1] == '\r') i--;
+			if (current == l) return std::string(result.rbegin(), result.rend());
+			result = "";
+			current++;
+		}
+		else result += s[i];
+	}
+	if (isOutOfBounds) *isOutOfBounds = current<l;
+	if (s[i] != '\n' && i == 0) return s[0] + std::string(result.rbegin(), result.rend());
+	return std::string(result.rbegin(), result.rend());
+}
+
+/**
+*
+*/
+static std::string replaceLineFromEnd(std::string s, unsigned int li, std::string l) {
+	if (s.empty()) return s;
+	unsigned int current = 0;
+	unsigned int start = 0, end = s.length() - 1;
+	unsigned int i;
+	for (i = s.length() - 1; i > 0; i--) {
+		if (s[i] == '\n') {
+			if (i > 0) if (s[i - 1] == '\r') i--;
+			if (current == li) {
+				start = i + 1;
+				break;
+			}
+			end = i - 1;
+			current++;
+		}
+	}
+	if (i == 0) start = 0;
+	if (current == li) s.replace(start, end - start + 1, l);
+	return s;
+}
+
+/**
 * Polls stdin for GLSL code while isRunning_ is true.
 * Sets inputThreadFlag_ when a line of code is ready to be compiled.
 */
@@ -655,19 +701,22 @@ static void runREPL() {
 		//do nothing, thread is not meant to start yet
 	}
 
+	ViewState* v = &viewStates_[activeView_];
+	const int pollInterval = 200; // milliseconds
+	std::string in; // input buffer
+	unsigned int historyIndex = 0; // current line from end of shader
+
 	// Need non-processed input mode to be able to handle CTRL+X events
 	SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS);
 
-	ViewState* v = &viewStates_[activeView_];
 	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 	printREPLIntro();
 	std::cout << GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_;
 	std::cout << "  " << std::flush; // indentation
 
-	const int pollInterval = 200; // milliseconds
-	std::string in;
 	while (isRunning_) {
 
+		// On view change print new shader code
 		if (activeView_ != prevActiveView_) {
 			prevActiveView_ = activeView_;
 			v = &viewStates_[activeView_];
@@ -679,7 +728,8 @@ static void runREPL() {
 			in = ""; // discard unfinished input
 		}
 
-		if (in.size() == 0) {
+		// While input empty display general info
+		if (in.empty()) {
 			duration<double> sec = std::chrono::high_resolution_clock::now() - launchTime_;
 			SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_INTENSITY);
 			std::cout 
@@ -702,10 +752,18 @@ static void runREPL() {
 
 		            char c = ev.uChar.AsciiChar;
 		            if (c == '\r' || c == '\n') { // enter
-		                if (in.size() > 0) {
-							v->fragmentShaderSourceTmp_ = v->fragmentShaderSource_ + "  " + in + '\n';
-							inputThreadFlag_ = true;
-							in = "";
+		                if (!in.empty()) {
+							if (historyIndex == 0) {
+								v->fragmentShaderSourceTmp_ = v->fragmentShaderSource_ + "  " + in + '\n';
+								inputThreadFlag_ = true;
+								in = "";
+							}
+							else {
+								v->fragmentShaderSourceTmp_ = replaceLineFromEnd(v->fragmentShaderSource_, historyIndex, in);
+								inputThreadFlag_ = true;
+								in = "";
+								historyIndex = 0;
+							}
 						}
 						std::cout << '\n';
 		            } else if (c == 8) { // backspace
@@ -716,7 +774,7 @@ static void runREPL() {
 		                    std::cout << '\r' << "  " << in << std::flush;
 		                }
 		            } else if (c >= 32 && c <= 126) { // printable
-		                if (in.size() == 0) std::cout << "\n  " << std::flush;
+		                if (in.empty()) std::cout << "\n  " << std::flush;
 		                in += c;
 						SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 		                std::cout << c;
@@ -731,6 +789,42 @@ static void runREPL() {
 					}
 					else if (vk == VK_NEXT) { // PAGEDOWN
 						PostMessageA(windowHandle_, WM_KEYDOWN, VK_NEXT, 0);
+					}
+					else if (vk == VK_UP) {
+						if (!in.empty()) {
+							std::string whitespace(in.size(), ' ');
+							std::cout << '\r' << "  " << whitespace << std::flush;
+						}
+						else {
+							std::cout << "\n  " << std::flush;
+							SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+						}
+						bool isOutOfBounds = false;
+						in = getLineFromEnd(v->fragmentShaderSource_, historyIndex+1, &isOutOfBounds);
+						in.erase(0, in.find_first_not_of(" "));
+						if (!isOutOfBounds) historyIndex++;
+						std::cout << '\r' << "  " << in << std::flush;
+					}
+					else if (vk == VK_DOWN) {
+						if (historyIndex > 0) {
+							if (!in.empty()) {
+								std::string whitespace(in.size(), ' ');
+								std::cout << '\r' << "  " << whitespace << std::flush;
+							}
+							else {
+								std::cout << "\n  " << std::flush;
+								SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+							}
+							historyIndex--;
+							if (historyIndex == 0) {
+								in = "";
+							}
+							else {
+								in = getLineFromEnd(v->fragmentShaderSource_, historyIndex);
+								in.erase(0, in.find_first_not_of(" "));
+							}
+							std::cout << '\r' << "  " << in << std::flush;
+						}
 					}
 					if ((ev.dwControlKeyState & LEFT_CTRL_PRESSED) == LEFT_CTRL_PRESSED) {
 						if (vk == 'S' || vk == 'O') {
