@@ -50,7 +50,7 @@ const char* glerr2str(GLenum errorCode) {
 #define GL(opname, ...) gl ## opname (__VA_ARGS__); { GLenum e = glGetError(); if (e!=GL_NO_ERROR) { \
 	printf("%s %s %s %s %d %s %s\n", glerr2str(e), "returned by", #opname, "at line", __LINE__, "in file", __FILE__); } }
 
-static float identity_[4][4] = { { 1,0,0,0 },{ 0,1,0,0 },{ 0,0,1,0 },{ 0,0,0,1 } };
+static const float IDENTITY_[4][4] = { { 1,0,0,0 },{ 0,1,0,0 },{ 0,0,1,0 },{ 0,0,0,1 } };
 
 // Holds if GL is enabled through createGLContexts
 static bool initialized_ = false;
@@ -71,10 +71,10 @@ static HWND windowHandle_;
 static HGLRC glRenderContext_;
 
 // Holds GLSL version used in shaders
-static const std::string glslVersionString_ = "#version 430\n";
+static const std::string GLSL_VERSION_STRING_ = "#version 430\n";
 
 // Holds constant vertex shader source
-static const std::string vertexShaderSource_ = glslVersionString_ +
+static const std::string VERTEX_SHADER_SRC_ = GLSL_VERSION_STRING_ +
 "layout(location = 0) in vec2 pos;\
 layout(location=42) uniform mat4 PROJ = mat4(1);\
 out vec2 p;\
@@ -95,7 +95,7 @@ static std::thread inputThread(runREPL);
 // Holds number of images added through createGLImage or createGLFramebuffer, maps directly to used texture units
 static unsigned int imageCount_ = 0;
 
-static const float pointSize_ = 40.f;
+static float pointSize_ = 40.f;
 
 /**
 * ViewState is an internal management structure to enable multiple views in the GL window.
@@ -118,7 +118,7 @@ struct ViewState {
 	// Max locations must be at least 1024 per GL spec.
 	std::string glslUniformString_ = 
 "layout(location=42) uniform mat4 PROJ = mat4(1);\n\
-layout(location=43) uniform vec2 PX;\n\
+layout(location=43) uniform vec2 PX_SIZE;\n\
 layout(location=44) uniform float POINT_SIZE;\n\
 layout(location=45) uniform float DELTA_T = 0.005;\n";
 
@@ -313,15 +313,13 @@ static LRESULT CALLBACK onWindowMessage(
 			return 0; 
 		case WM_SIZE: 
 			// Set the size and position of the window.
+
+			//TODO need to resize framebuffers here
+
 			width_ = LOWORD(lParam);
 			height_ = HIWORD(lParam);
-			return 0; 
-
-		case WM_CHAR:
-			if (wParam == VK_ESCAPE) {
-				PostQuitMessage(0);
-			}
 			return 0;
+
 		case WM_KEYDOWN:
 			if (wParam == VK_PRIOR) {
 				activeView_ = (activeView_ + 1) % viewStates_.size();
@@ -594,8 +592,8 @@ void hotreloadGLShader() {
 	if (inputThreadFlag_) {
 		ViewState* v = &viewStates_[activeView_];
 		GLuint newVertexShader, newFragmentShader;
-		if (compileGLShader(vertexShaderSource_,
-			glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSourceTmp_ + "}",
+		if (compileGLShader(VERTEX_SHADER_SRC_,
+			GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSourceTmp_ + "}",
 			&newVertexShader, &newFragmentShader)) 
 		{
 			// Workaround to print current source after view state change
@@ -663,7 +661,7 @@ static void runREPL() {
 	ViewState* v = &viewStates_[activeView_];
 	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 	printREPLIntro();
-	std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_;
+	std::cout << GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_;
 	std::cout << "  " << std::flush; // indentation
 
 	const int pollInterval = 200; // milliseconds
@@ -676,7 +674,7 @@ static void runREPL() {
 			clearConsole();
 			SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 			printREPLIntro();
-			std::cout << glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_;
+			std::cout << GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_;
 			std::cout << "  " << in << std::flush; // indentation
 			in = ""; // discard unfinished input
 		}
@@ -750,7 +748,7 @@ static void runREPL() {
 								ofn.lpstrTitle = "Save your shader";
 								if (GetSaveFileNameA(&ofn)) { // opens Windows dialog and blocks
 									std::ofstream outfile(filename);
-									const auto frag = glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}";
+									const auto frag = GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}";
 									outfile.write(frag.c_str(), frag.length());
 									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN);
 									std::cout << "\n  [SAVED " << filename << "]\n";
@@ -773,7 +771,7 @@ static void runREPL() {
 									clearConsole();
 									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 									printREPLIntro();
-									std::cout << glslVersionString_ + v->glslUniformString_ + source;
+									std::cout << GLSL_VERSION_STRING_ + v->glslUniformString_ + source;
 									SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_GREEN);
 									std::cout << "  [LOADED " << filename << "]\n";
 									v->fragmentShaderSourceTmp_ = source;
@@ -881,7 +879,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 
 	ViewState* v = &viewStates_[activeView_];
 
-	// Fake sphere normal and diffuse lighting
+	v->fragmentShaderSource_ += "\n  // Sphere-normal-from-point trick\n\n";
 	v->fragmentShaderSource_ += "  vec3 normal = vec3(0, 0, 0);\n";
 	v->fragmentShaderSource_ += "  normal.xy = gl_PointCoord * 2.0 - vec2(1.0);\n";
 	v->fragmentShaderSource_ += "  float mag = dot(normal.xy, normal.xy);\n";
@@ -969,8 +967,8 @@ void createGLBuffer(size_t bytes, void* outBuffer) {
 		+ "  f = float(buf" + bindingPointString + "[i/4][i%4]) / 4294967296.;\n"
 		+ "  if(p.y < f) color=vec4(1); else color=vec4(0);\n";
 
-	compileGLShader(vertexShaderSource_,
-		glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
+	compileGLShader(VERTEX_SHADER_SRC_,
+		GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
 		&v->vertexShader_, &v->fragmentShader_);
 	v->shaderProgram_ = glCreateProgram();
 	glAttachShader(v->shaderProgram_, v->fragmentShader_);
@@ -1053,7 +1051,7 @@ void createGLImage(int w, int h, void* outImageHandle, void* data, int channels)
 */
 void pushGLView(float* proj) {
 
-	activeView_ = viewStates_.size();
+	activeView_ = (unsigned int)viewStates_.size();
 	ViewState view;
 	view.projection_ = proj;
 	viewStates_.push_back(view);
@@ -1092,16 +1090,18 @@ static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* unifo
 	}
 
 	// Vertex transform
-	GL(UniformMatrix4fv, 42, 1, GL_TRUE, v->projection_ ? v->projection_ : &identity_[0][0]);
+	GL(UniformMatrix4fv, 42, 1, GL_TRUE, v->projection_ ? v->projection_ : &IDENTITY_[0][0]);
 
 	// Pixel size
 	GL(Uniform2f, 43, 2.0f / width_, 2.0f / height_);
 
-	// Point size
-	GL(Uniform1f, 44, 2.0f / pointSize_);
+	if (v->currentPrimitive_ == GL_POINTS) {
+		glPointSize(pointSize_);
+		GL(Uniform1f, 44, 2.0f / pointSize_);
+	}
 
 	// Frame time
-	GL(Uniform1f, 45, frameTime_.count()/1000.f);
+	GL(Uniform1f, 45, (float)frameTime_.count()/1000.f);
 
 	// Other parameters
 	if (uniformSlot1) GL(Uniform1f, 142, *uniformSlot1);
@@ -1150,8 +1150,8 @@ void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) 
 				v->glslUniformString_ += slot3.name;
 				v->glslUniformString_ += ";\n";
 			}
-			assert(compileGLShader(vertexShaderSource_,
-				glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
+			assert(compileGLShader(VERTEX_SHADER_SRC_,
+				GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
 				&v->vertexShader_, &v->fragmentShader_));
 			v->shaderProgram_ = glCreateProgram();
 			glAttachShader(v->shaderProgram_, v->fragmentShader_);
@@ -1181,9 +1181,29 @@ void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) 
 	ImGui::NewFrame();
 
 	if (ImGui::BeginMainMenuBar()) {
-		if (slot1.name) ImGui::SliderFloat(slot1.name, slot1.ptr, slot1.minVal, slot1.maxVal);
-		if (slot2.name) ImGui::SliderFloat(slot2.name, slot2.ptr, slot2.minVal, slot2.maxVal);
-		if (slot3.name) ImGui::SliderFloat(slot3.name, slot3.ptr, slot3.minVal, slot3.maxVal);
+		if (ImGui::BeginMenu("POINT_SIZE")) {
+			ImGui::DragFloat("", &pointSize_, 1.f, 5.f, 50.f);
+			ImGui::EndMenu();
+		}
+		ImGui::Separator();
+		if (slot1.name) {
+			if (ImGui::BeginMenu(slot1.name)) {
+				ImGui::SliderFloat("", slot1.ptr, slot1.minVal, slot1.maxVal);
+				ImGui::EndMenu();
+			}
+		}
+		if (slot2.name) {
+			if (ImGui::BeginMenu(slot2.name)) {
+				ImGui::SliderFloat("", slot2.ptr, slot2.minVal, slot2.maxVal);
+				ImGui::EndMenu();
+			}
+		}
+		if (slot3.name) {
+			if (ImGui::BeginMenu(slot3.name)) {
+				ImGui::SliderFloat("", slot3.ptr, slot3.minVal, slot3.maxVal);
+				ImGui::EndMenu();
+			}
+		}
 		ImGui::EndMainMenuBar();
 	}
 
@@ -1252,8 +1272,8 @@ void openGLWindowAndREPL() {
 
 	for (int i = 0; i < viewStates_.size(); i++) {
 		ViewState* v = &viewStates_[i];
-		compileGLShader(vertexShaderSource_,
-			glslVersionString_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
+		compileGLShader(VERTEX_SHADER_SRC_,
+			GLSL_VERSION_STRING_ + v->glslUniformString_ + v->fragmentShaderSource_ + "}",
 			&v->vertexShader_, &v->fragmentShader_);
 		v->shaderProgram_ = glCreateProgram();
 		glAttachShader(v->shaderProgram_, v->fragmentShader_);
@@ -1278,7 +1298,7 @@ void openGLWindowAndREPL() {
 
 	// Setup Platform/Renderer bindings
 	ImGui_ImplWin32_Init(windowHandle_);
-	ImGui_ImplOpenGL3_Init(glslVersionString_.c_str());
+	ImGui_ImplOpenGL3_Init(GLSL_VERSION_STRING_.c_str());
 }
 
 /**

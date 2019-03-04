@@ -487,7 +487,7 @@ int main( int argc, char** argv )
 			attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
 		}
 
-		runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor });
+		runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor, .0f, .01f });
 
 		step();
 
