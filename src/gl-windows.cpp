@@ -6,6 +6,10 @@
 #include <glad/glad.h>
 #include <glad/glad_wgl.h>
 
+#include <imgui.h>
+#include <imgui_impl_win32.h>
+#include <imgui_impl_opengl3.h>
+
 #include <vector>
 #include <iostream>
 #include <iomanip> // std::setw
@@ -282,6 +286,11 @@ static void createGLFramebuffer(GLuint* f) {
 }
 
 /**
+* For providing mouse/keyboard inputs to ImGui
+*/
+IMGUI_IMPL_API LRESULT  ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+/**
 * Callback for system messages (e.g. user input or other events)
 * Also the application can send messages (e.g. via UpdateWindow, DispatchMessage)
 * More info:
@@ -292,7 +301,9 @@ static LRESULT CALLBACK onWindowMessage(
 	UINT uMsg,        // message identifier
 	WPARAM wParam,    // first message parameter
 	LPARAM lParam)    // second message parameter
-{ 
+{
+	ImGui_ImplWin32_WndProcHandler(windowHandle, uMsg, wParam, lParam);
+	
 	switch (uMsg) 
 	{ 
 		case WM_CREATE: 
@@ -1107,15 +1118,35 @@ static void runGLShader_internal(ViewState* v) {
 *
 */
 void runGLShader() {
+
 	// Render view stack from bottom up to active view
 	for (unsigned int i = 0; i < activeView_; i++) {
 		GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[i].framebuffer_);
 		runGLShader_internal(&viewStates_[i]);
 	}
+
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 	high_resolution_clock::time_point start = high_resolution_clock::now();
 	runGLShader_internal(&viewStates_[activeView_]);
 	shaderTime_ = high_resolution_clock::now() - start;
+
+
+	// Render ImGui
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui_ImplWin32_NewFrame();
+	ImGui::NewFrame();
+
+	if (ImGui::BeginMainMenuBar()) {
+		static float f = 0.5f;
+		static bool b = true;
+		ImGui::SliderFloat("Value", &f, 0.0f, 1.0f);
+		ImGui::Checkbox("Check", &b);
+		ImGui::EndMainMenuBar();
+	}
+
+	ImGui::Render();
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
 /**
@@ -1132,6 +1163,7 @@ bool processWindowsMessage(unsigned int* mouse, bool* mouseDown, char* pressedKe
 	// Use PeekMessage because unlike GetMessage it does not block.
 	// This enables us to control our update frequency elsewhere.
 	if (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE) != 0) {
+
 		BOOL bRet;
 		bRet = GetMessage(&msg, NULL, 0, 0);
 		if (bRet > 0)  // (bRet > 0 indicates a message that must be processed.)
@@ -1151,16 +1183,16 @@ bool processWindowsMessage(unsigned int* mouse, bool* mouseDown, char* pressedKe
 		}
 	}
 
-	if (mouse) {
+	if (mouse && !ImGui::GetIO().WantCaptureMouse) {
 		mouse[0] = mouse_[0];
 		mouse[1] = mouse_[1];
 	}
 
-	if (mouseDown) {
+	if (mouseDown && !ImGui::GetIO().WantCaptureMouse) {
 		*mouseDown = mouseDown_;
 	}
 
-	if (pressedKey) {
+	if (pressedKey && !ImGui::GetIO().WantCaptureKeyboard) {
 		*pressedKey = pressedKey_;
 	}
 
@@ -1190,6 +1222,20 @@ void openGLWindowAndREPL() {
 	launchTime_ = std::chrono::high_resolution_clock::now();
 
 	isRunning_ = true;
+
+
+	// Setup Dear ImGui context
+	IMGUI_CHECKVERSION();
+	ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO(); (void)io;
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
+
+	// Setup Dear ImGui style
+	ImGui::StyleColorsDark();
+
+	// Setup Platform/Renderer bindings
+	ImGui_ImplWin32_Init(windowHandle_);
+	ImGui_ImplOpenGL3_Init(glslVersionString_.c_str());
 }
 
 /**

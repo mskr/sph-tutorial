@@ -13,6 +13,10 @@ endif()
 # external includes
 include_directories( SYSTEM "external/glm" )
 include_directories( SYSTEM "external/glad/include" )
+include_directories( SYSTEM "external/stb" )
+include_directories( SYSTEM "external/imgui" )
+
+add_compile_definitions(IMGUI_IMPL_OPENGL_LOADER_GLAD)
 
 # application code
 include_directories( "include" )
@@ -21,6 +25,12 @@ add_executable(
     "src/main.cpp"
     "external/glad/src/glad_wgl.c"
     "external/glad/src/glad.c"
+    "external/imgui/imgui_impl_win32.cpp"
+    "external/imgui/imgui_impl_opengl3.cpp"
+    "external/imgui/imgui.cpp"
+    "external/imgui/imgui_draw.cpp"
+    "external/imgui/imgui_widgets.cpp"
+    "external/imgui/imgui_demo.cpp"
 	"src/gl-windows.cpp" )
 
 target_link_libraries(sph-benchmark "opengl32.lib" "winmm.lib")
