@@ -462,14 +462,6 @@ int main( int argc, char** argv )
 
 	createGLQuad();
 
-	pushGLView();
-
-	createGLQuad();
-
-	pushGLView();
-
-	createGLQuad();
-
 	float curvatureFlowFactor = .001f; ;
 
 	openGLWindowAndREPL();

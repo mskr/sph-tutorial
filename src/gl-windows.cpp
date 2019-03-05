@@ -133,9 +133,10 @@ void main() {\n\
 	// Holds a copy of the above after input was made, gets written back when successfully compiled
 	std::string fragmentShaderSourceTmp_;
 
-	// Holds local image counter per view/shader, needed to set uniforms
-	unsigned int imageCount_ = 0;
-	int imageOffset_ = -1;
+	// Holds local subrange of image units, needed to set uniforms before using them in shader
+	// Framebuffer images are produced by the previous view
+	unsigned int imageCount_ = 0, framebufferImageCount_ = 0;
+	int imageOffset_ = -1, framebufferImageOffset_ = -1;
 
 	// Holds number of vertices added through createGLTriangles2D
 	GLsizei currentVertexCount_ = 0;
@@ -143,9 +144,15 @@ void main() {\n\
 	// Holds current drawing primitive
 	GLenum currentPrimitive_ = GL_TRIANGLES;
 
+	// Holds mat4 for vertex transform
 	float* projection_ = 0;
 
-	GLuint framebuffer_;
+	// Holds offscreen framebuffer where this view is rendered when used by higher view
+	GLuint framebuffer_ = 0;
+
+	// Holds number of repeated executions of same shader on same geometry into same framebuffer
+	// but using framebuffer images from the last pass instead of lower view
+	int numPasses_ = 1;
 
 } defaultView_;
 
@@ -236,8 +243,8 @@ static void createGLFramebuffer(GLuint* f) {
 	GL(TexParameteri, GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	GL(TexParameteri, GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
-	if (v->imageOffset_ < 0) v->imageOffset_ = imageCount_;
-	imageCount_++; v->imageCount_++;
+	if (v->framebufferImageOffset_ < 0) v->framebufferImageOffset_ = imageCount_;
+	imageCount_++; v->framebufferImageCount_++;
 
 	// Analog for the depth texture
 	const std::string nameD = "DEPTHMAP";
@@ -245,7 +252,7 @@ static void createGLFramebuffer(GLuint* f) {
 	v->glslUniformString_ += "layout(location = " + countStrD + ") uniform sampler2D " + nameD + ";\n";
 	GL(ActiveTexture, GL_TEXTURE0 + imageCount_);
 
-	imageCount_++; v->imageCount_++;
+	imageCount_++; v->framebufferImageCount_++;
 
 	// Attach z buffer texture (R32F)
 	GLuint zbuffer;
@@ -1157,7 +1164,8 @@ void pushGLView(float* proj) {
 /**
 *
 */
-static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* uniformSlot2, float* uniformSlot3) {
+static void runGLShader_internal(unsigned int viewIdx, float* uniformSlot1, float* uniformSlot2, float* uniformSlot3) {
+	ViewState* v = &viewStates_[viewIdx];
 
 	// Vertex array
 	GL(BindVertexArray, v->vao_);
@@ -1182,6 +1190,10 @@ static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* unifo
 		// It is possible to bind textures to different targets in one unit,
 		// but GL forbids to render with this state.
 	}
+	for (int i = v->framebufferImageOffset_; i < v->framebufferImageOffset_ + v->framebufferImageCount_; i++) {
+		GL(ActiveTexture, GL_TEXTURE0 + i);
+		GL(Uniform1i, i, i);
+	}
 
 	// Vertex transform
 	GL(UniformMatrix4fv, 42, 1, GL_TRUE, v->projection_ ? v->projection_ : &IDENTITY_[0][0]);
@@ -1195,7 +1207,7 @@ static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* unifo
 	}
 
 	// Frame time
-	GL(Uniform1f, 45, (float)frameTime_.count()/1000.f);
+	GL(Uniform1f, 45, (float)frameTime_.count() / 1000.f);
 
 	// Other parameters
 	if (uniformSlot1) GL(Uniform1f, 142, *uniformSlot1);
@@ -1205,18 +1217,37 @@ static void runGLShader_internal(ViewState* v, float* uniformSlot1, float* unifo
 	// Viewport
 	glViewport(0, 0, width_, height_);
 
-	// Framebuffer
-	GL(Clear, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	// Multiple shader runs possible: iteratively write to previous framebuffer
+	// to refine an image before writing to next framebuffer or the screen
+	for (int pass = 0; pass < v->numPasses_; pass++) {
 
-	// Pixel operations
-	GL(Enable, GL_DEPTH_TEST);
-	GL(DepthFunc, GL_LESS);
-	GL(Enable, GL_BLEND);
-	// Incoming colors are scaled with their opacity (alpha) and added 
-	// to framebuffer colors that are scaled with the transparency (1-alpha)
-	GL(BlendFunc, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		// Framebuffer
+		if (pass < v->numPasses_ - 1) {
+			// iterate without clear
+			GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[viewIdx-1].framebuffer_);
+		}
+		else {
+			// write to next framebuffer
+			if (viewIdx < activeView_) {
+				GL(BindFramebuffer, GL_FRAMEBUFFER, v->framebuffer_);
+			}
+			else {
+				// active view is written to screen
+				GL(BindFramebuffer, GL_FRAMEBUFFER, 0);
+			}
+			GL(Clear, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		}
 
-	GL(DrawArrays, v->currentPrimitive_, 0, v->currentVertexCount_);
+		// Pixel operations
+		GL(Enable, GL_DEPTH_TEST);
+		GL(DepthFunc, GL_LESS);
+		GL(Enable, GL_BLEND);
+		// Incoming colors are scaled with their opacity (alpha) and added 
+		// to framebuffer colors that are scaled with the transparency (1-alpha)
+		GL(BlendFunc, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+		GL(DrawArrays, v->currentPrimitive_, 0, v->currentVertexCount_);
+	}
 }
 
 /**
@@ -1255,17 +1286,12 @@ void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) 
 		firstTime = false;
 	}
 
+	high_resolution_clock::time_point start = high_resolution_clock::now();
 
 	// Render view stack from bottom up to active view
-	for (unsigned int i = 0; i < activeView_; i++) {
-		GL(BindFramebuffer, GL_FRAMEBUFFER, viewStates_[i].framebuffer_);
-		runGLShader_internal(&viewStates_[i], slot1.ptr, slot2.ptr, slot3.ptr);
-	}
+	for (unsigned int vi = 0; vi <= activeView_; vi++)
+		runGLShader_internal(vi, slot1.ptr, slot2.ptr, slot3.ptr);
 
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-	high_resolution_clock::time_point start = high_resolution_clock::now();
-	runGLShader_internal(&viewStates_[activeView_], slot1.ptr, slot2.ptr, slot3.ptr);
 	shaderTime_ = high_resolution_clock::now() - start;
 
 
@@ -1275,8 +1301,12 @@ void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) 
 	ImGui::NewFrame();
 
 	if (ImGui::BeginMainMenuBar()) {
-		if (ImGui::BeginMenu("POINT_SIZE")) {
+		if (ImGui::BeginMenu("Point Size")) {
 			ImGui::DragFloat("", &pointSize_, 1.f, 5.f, 50.f);
+			ImGui::EndMenu();
+		}
+		if (ImGui::BeginMenu("Num Passes")) { // TODO other mechanism to make per-view settings
+			ImGui::SliderInt("", &viewStates_[activeView_].numPasses_, 1, 10);
 			ImGui::EndMenu();
 		}
 		ImGui::Separator();
@@ -1384,7 +1414,6 @@ void openGLWindowAndREPL() {
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
-	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
 
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
