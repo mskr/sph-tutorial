@@ -57,7 +57,7 @@ static bool initialized_ = false;
 
 // Holds initial window size
 static unsigned int width_ = 1000;
-static unsigned int height_ = 1000;
+static unsigned int height_ = 500;
 
 // Holds mouse coords in pixels, origin = top left
 static unsigned int mouse_[2];
@@ -572,7 +572,7 @@ static void createGLContext(HDC deviceContext, HGLRC* outGLContext) {
 	assert( getWglFunctionPointers( &wglCreateContextAttribsARBPtr, &wglChoosePixelFormatARBPtr ) );
 	int attribList[] = {
 		WGL_CONTEXT_MAJOR_VERSION_ARB, 4,
-		WGL_CONTEXT_MINOR_VERSION_ARB, 0,
+		WGL_CONTEXT_MINOR_VERSION_ARB, 3,
 		WGL_CONTEXT_FLAGS_ARB, 0,
 		WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
 		0, 0
@@ -757,9 +757,9 @@ static void runREPL() {
 					if (!buf[i].Event.KeyEvent.bKeyDown) continue;
 					const KEY_EVENT_RECORD ev = buf[i].Event.KeyEvent;
 
-		            char c = ev.uChar.AsciiChar;
-		            if (c == '\r' || c == '\n') { // enter
-		                if (!in.empty()) {
+					char c = ev.uChar.AsciiChar;
+					if (c == '\r' || c == '\n') { // enter
+						if (!in.empty()) {
 							if (historyIndex == 0) {
 								v->fragmentShaderSourceTmp_ = v->fragmentShaderSource_ + "  " + in + '\n';
 								inputThreadFlag_ = true;
@@ -773,24 +773,24 @@ static void runREPL() {
 							}
 						}
 						std::cout << '\n';
-		            } else if (c == 8) { // backspace
-		                if (in.size() > 0) {
-		                    std::string whitespace(in.size(), ' ');
-		                    std::cout << '\r' << "  " << whitespace << std::flush;
-		                    in.resize(in.size() - 1);
-		                    std::cout << '\r' << "  " << in << std::flush;
-		                }
-		            } else if (c >= 32 && c <= 126) { // printable
-		                if (in.empty()) std::cout << "\n  " << std::flush;
-		                in += c;
+					} else if (c == 8) { // backspace
+						if (in.size() > 0) {
+							std::string whitespace(in.size(), ' ');
+							std::cout << '\r' << "  " << whitespace << std::flush;
+							in.resize(in.size() - 1);
+							std::cout << '\r' << "  " << in << std::flush;
+						}
+					} else if (c >= 32 && c <= 126) { // printable
+						if (in.empty()) std::cout << "\n  " << std::flush;
+						in += c;
 						SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-		                std::cout << c;
-		            }
+						std::cout << c;
+					}
 					WORD vk = ev.wVirtualKeyCode;
-		            if (vk == 27) { // escape
-		                isRunning_ = false;
-		                break;
-		            }
+					if (vk == 27) { // escape
+						isRunning_ = false;
+						break;
+					}
 					if (vk == VK_PRIOR) { // PAGEUP
 						PostMessageA(windowHandle_, WM_KEYDOWN, VK_PRIOR, 0);
 					}
@@ -882,7 +882,7 @@ static void runREPL() {
 							}
 						}
 					}
-		        }
+				}
 			}
 		}
 	}
@@ -1184,35 +1184,46 @@ static void runGLShader_internal(unsigned int viewIdx, float* uniformSlot1, floa
 		// Select all targets (2D,3D,etc.) under unit i.
 		GL(ActiveTexture, GL_TEXTURE0 + i);
 		// Select target that corresponds to sampler type
-		GL(Uniform1i, i, i);
+		glUniform1i( i, i);
 		// Note: We use one uniform location for one unit,
 		// so that we have one sampler type for one unit.
 		// It is possible to bind textures to different targets in one unit,
 		// but GL forbids to render with this state.
+
+		glGetError(); // ignore errors for inactive uniforms
 	}
 	for (int i = v->framebufferImageOffset_; i < v->framebufferImageOffset_ + v->framebufferImageCount_; i++) {
 		GL(ActiveTexture, GL_TEXTURE0 + i);
-		GL(Uniform1i, i, i);
+		glUniform1i(i, i);
+
+		glGetError();
 	}
 
 	// Vertex transform
-	GL(UniformMatrix4fv, 42, 1, GL_TRUE, v->projection_ ? v->projection_ : &IDENTITY_[0][0]);
+	glUniformMatrix4fv(42, 1, GL_TRUE, v->projection_ ? v->projection_ : &IDENTITY_[0][0]);
+	glGetError();
 
 	// Pixel size
-	GL(Uniform2f, 43, 2.0f / width_, 2.0f / height_);
+	glUniform2f(43, 2.0f / width_, 2.0f / height_);
+	glGetError();
 
 	if (v->currentPrimitive_ == GL_POINTS) {
 		glPointSize(pointSize_);
-		GL(Uniform1f, 44, 2.0f / pointSize_);
+		glUniform1f(44, 2.0f / pointSize_);
+		glGetError();
 	}
 
 	// Frame time
-	GL(Uniform1f, 45, (float)frameTime_.count() / 1000.f);
+	glUniform1f(45, (float)frameTime_.count() / 1000.f);
+	glGetError();
 
 	// Other parameters
-	if (uniformSlot1) GL(Uniform1f, 142, *uniformSlot1);
-	if (uniformSlot2) GL(Uniform1f, 143, *uniformSlot2);
-	if (uniformSlot3) GL(Uniform1f, 144, *uniformSlot3);
+	if (uniformSlot1) glUniform1f(142, *uniformSlot1);
+	glGetError();
+	if (uniformSlot2) glUniform1f(143, *uniformSlot2);
+	glGetError();
+	if (uniformSlot3) glUniform1f(144, *uniformSlot3);
+	glGetError();
 
 	// Viewport
 	glViewport(0, 0, width_, height_);
