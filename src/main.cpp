@@ -84,11 +84,15 @@ void init( const unsigned int N )
     // Initialize particles
     // We will make a block of particles with a total width of 1/4 of the screen.
     float w = SIM_W / 4;
-    for( float y = bottom + w; y <= w+w*2.f; y += r * 0.5f )
+    for( float y = bottom + w; true; y += r * 0.5f )
     {
+        if (particles.size() >= N)
+        {
+            break;
+        }
         for(float x = -w; x <= w; x += r * 0.5f )
         {
-            if( particles.size() > N )
+            if( particles.size() >= N )
             {
                 break;
             }
