@@ -19,6 +19,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+// --------------------------------------------------------------------
+
+#define MATERIAL_SNOW 1
+
+// --------------------------------------------------------------------
+
 using namespace std::chrono;
 static duration<double, std::milli> stepTime_;
 
@@ -37,35 +43,56 @@ float randab(float a, float b)
 }
 
 // --------------------------------------------------------------------
+// Data structures are 8 byte aligned for optimal loading on 64 bit systems
+__pragma(pack(push, 8))
+
+struct Neighbor;
+
+// The Particle structure holding all of the relevant information.
+// A structure-of-arrays approach is used, i.e. stuff is grouped for cache efficiency.
+struct Particles
+{
+    struct Position {
+        glm::vec2 pos;
+    };
+    struct Meta {
+
+        unsigned int id; // index, valid for all data arrays
+
+        float r, g, b; // debug color
+
+        glm::vec2 pos_old; // for verlet?
+        glm::vec2 vel;
+        glm::vec2 force;
+        float mass;
+        float rho; // density
+        float rho_near; // ?
+        float press;
+        float press_near;
+        float sigma; // ?
+        float beta; // ?
+
+        Neighbor* neighbors; // current neighbors found via spatial hashing and cleared when particle moves
+        size_t neighbor_count;
+    };
+    Position* positions;
+    Meta* meta;
+    unsigned int N;
+};
+
 // A structure for holding two neighboring particles and their weighted distances
-struct Particle;
 struct Neighbor
 {
-    Particle* j;
+    unsigned int id;
     float q, q2;
 };
 
-// The Particle structure holding all of the relevant information.
-struct Particle
-{
-    glm::vec2 pos;
-    float r, g, b;
-
-    glm::vec2 pos_old; // for verlet?
-    glm::vec2 vel;
-    glm::vec2 force;
-    float mass;
-    float rho; // density
-    float rho_near; // ?
-    float press;
-    float press_near;
-    float sigma; // ?
-    float beta; // ?
-    std::vector< Neighbor > neighbors;
-};
-
 // Our collection of particles
-std::vector< Particle > particles;
+Particles particles;
+
+//TODO implement SOA access
+//     load positions to GPU
+//     do metaballs, other distance fields, Parzen window, ellipses with PCA...
 
 // --------------------------------------------------------------------
 const float G = .02f * .25;           // Gravitational Constant for our simulation
@@ -81,31 +108,52 @@ const float bottom = 0;               // The floor of the world
 // --------------------------------------------------------------------
 void init( const unsigned int N )
 {
+    particles.N = N;
+    particles.positions = (Particles::Position*)malloc(N * sizeof(Particles::Position));
+    particles.meta = (Particles::Meta*)malloc(N * sizeof(Particles::Meta));
+
+    unsigned int i = 0;
+
     // Initialize particles
     // We will make a block of particles with a total width of 1/4 of the screen.
     float w = SIM_W / 4;
     for( float y = bottom + w; true; y += r * 0.5f )
     {
-        if (particles.size() >= N)
+        if (i >= N)
         {
             break;
         }
         for(float x = -w; x <= w; x += r * 0.5f )
         {
-            if( particles.size() >= N )
+            if( i >= N )
             {
                 break;
             }
 
-            Particle p;
+            Particles::Position p;
             p.pos = glm::vec2(x, y);
-            p.pos_old = p.pos + 0.001f * glm::vec2(rand01(), rand01());
-            p.force = glm::vec2(0,0);
-            p.sigma = 3.f;
-            p.beta = 4.f;
-            particles.push_back(p);
+            particles.positions[i] = p;
+
+            Particles::Meta m;
+            m.id = i;
+            m.pos_old = p.pos + 0.001f * glm::vec2(rand01(), rand01());
+            m.force = glm::vec2(0,0);
+            m.sigma = 3.f;
+            m.beta = 4.f;
+            m.neighbors = (Neighbor*)malloc(sizeof(Neighbor));
+            m.neighbor_count = 0;
+            particles.meta[i] = m;
+
+            i++;
         }
     }
+}
+
+void shutdown() {
+    /*free(particles.positions);
+    free(particles.meta);
+    for (unsigned int i = 0; i < particles.N; i++)
+        free(particles.meta[i].neighbors);*/
 }
 
 // Mouse attractor
@@ -116,27 +164,26 @@ bool attracting = false;
 template< typename T >
 class SpatialIndex
 {
+    const float mInvCellSize;
+
+    // 3x3 neighborhood for 2D
+    // (just edit this array to support 3D)
+    const glm::ivec3 mOffsets[9] = {
+        { -1, -1, 0 },{ 0, -1, 0 },{ 1, -1, 0 },
+        { -1,  0, 0 },{ 0,  0, 0 },{ 1,  0, 0 },
+        { -1,  1, 0 },{ 0,  1, 0 },{ 1,  1, 0 } };
+
 public:
     typedef std::vector< T* > NeighborList;
 
     SpatialIndex
         (
         const unsigned int numBuckets,  // number of hash buckets
-        const float cellSize,           // grid cell size
-        const bool twoDeeNeighborhood   // true == 3x3 neighborhood, false == 3x3x3
+        const float cellSize           // grid cell size
         )
         : mHashMap( numBuckets )
         , mInvCellSize( 1.0f / cellSize )
-    {
-        // initialize neighbor offsets
-        for( int i = -1; i <= 1; i++ )
-            for( int j = -1; j <= 1; j++ )
-                if( twoDeeNeighborhood )
-                    mOffsets.push_back( glm::ivec3( i, j, 0 ) );
-                else
-                    for( int k = -1; k <= 1; k++ )
-                        mOffsets.push_back( glm::ivec3( i, j, k ) );
-    }
+    {}
 
     void Insert( const glm::vec3& pos, T* thing )
     {
@@ -183,16 +230,16 @@ private:
         return glm::ivec3( glm::floor( pos * invCellSize ) );
     }
 
+    // Map grid positions to dynamic list of local objects using custom hash function
     typedef std::unordered_map< glm::ivec3, NeighborList, TeschnerHash > HashMap;
     HashMap mHashMap;
-
-    std::vector< glm::ivec3 > mOffsets;
-
-    const float mInvCellSize;
 };
 
-typedef SpatialIndex< Particle > IndexType;
-IndexType indexsp( 4093, r, true );
+// Hash table that can compute 1D index from 2D or 3D positions
+// Template arg is the hashed object type, here particle id
+// First ctor arg is hash table size
+// Second ctor arg is grid cell size which determines the considered neighborhood
+SpatialIndex<unsigned int> indexsp( 4093, r );
 
 // --------------------------------------------------------------------
 void step()
@@ -203,90 +250,98 @@ void step()
     // This modified verlet integrator has dt = 1 and calculates the velocity
     // For later use in the simulation.
 #pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
+    for( int i = 0; i < (int)particles.N; ++i )
     {
         // Apply the currently accumulated forces
-        particles[i].pos += particles[i].force;
+        particles.positions[i].pos += particles.meta[i].force;
 
         // Restart the forces with gravity only. We'll add the rest later.
-        particles[i].force = glm::vec2( 0.0f, -::G );
+        particles.meta[i].force = glm::vec2( 0.0f, -::G );
 
         // Calculate the velocity for later.
-        particles[i].vel = particles[i].pos - particles[i].pos_old;
+        particles.meta[i].vel = particles.positions[i].pos - particles.meta[i].pos_old;
 
         // If the velocity is really high, we're going to cheat and cap it.
         // This will not damp all motion. It's not physically-based at all. Just
         // a little bit of a hack.
         const float max_vel = 2.0f;
-        const float vel_mag = glm::dot( particles[i].vel, particles[i].vel );
+        const float vel_mag = glm::dot( particles.meta[i].vel, particles.meta[i].vel );
         // If the velocity is greater than the max velocity, then cut it in half.
         if( vel_mag > max_vel * max_vel )
         {
-            particles[i].vel *= .5f;
+            particles.meta[i].vel *= .5f;
         }
 
         // Normal verlet stuff
-        particles[i].pos_old = particles[i].pos;
-        particles[i].pos += particles[i].vel;
+        particles.meta[i].pos_old = particles.positions[i].pos;
+        particles.positions[i].pos += particles.meta[i].vel;
 
         // If the Particle is outside the bounds of the world, then
         // Make a little spring force to push it back in.
-        if( particles[i].pos.x < -SIM_W ) particles[i].force.x -= ( particles[i].pos.x - -SIM_W ) / 8;
-        if( particles[i].pos.x >  SIM_W ) particles[i].force.x -= ( particles[i].pos.x - SIM_W ) / 8;
-        if( particles[i].pos.y < bottom ) particles[i].force.y -= ( particles[i].pos.y - bottom ) / 8;
-        //if( particles[i].pos.y > SIM_W * 2 ) particles[i].force.y -= ( particles[i].pos.y - SIM_W * 2 ) / 8;
+        if( particles.positions[i].pos.x < -SIM_W ) particles.meta[i].force.x -= ( particles.positions[i].pos.x - -SIM_W ) / 8;
+        if( particles.positions[i].pos.x >  SIM_W ) particles.meta[i].force.x -= ( particles.positions[i].pos.x - SIM_W ) / 8;
+        if( particles.positions[i].pos.y < bottom ) particles.meta[i].force.y -= ( particles.positions[i].pos.y - bottom ) / 8;
+        //if( particles.positions[i].pos.y > SIM_W * 2 ) particles.meta[i].force.y -= ( particles.positions[i].pos.y - SIM_W * 2 ) / 8;
 
         // Handle the mouse attractor.
         // It's a simple spring based attraction to where the mouse is.
-        const float attr_dist2 = glm::dot( particles[i].pos - attractor, particles[i].pos - attractor );
+        const float attr_dist2 = glm::dot( particles.positions[i].pos - attractor, particles.positions[i].pos - attractor );
         const float attr_l = SIM_W / 4;
         if( attracting )
         {
             if( attr_dist2 < attr_l * attr_l )
             {
-                particles[i].force -= ( particles[i].pos - attractor ) / 256.0f;
+                particles.meta[i].force -= ( particles.positions[i].pos - attractor ) / 256.0f;
             }
         }
 
         // Reset the nessecary items.
-        particles[i].rho = 0;
-        particles[i].rho_near = 0;
-        particles[i].neighbors.clear();
+        particles.meta[i].rho = 0;
+        particles.meta[i].rho_near = 0;
+        particles.meta[i].neighbor_count = 0;
     }
 
+
     // update spatial index
+    // ====================
+
+    //TODO investigate incremental update and if applicable measure perf gain
     indexsp.Clear();
-    for( auto& particle : particles )
+
+    // Sequential iteration since the hash map is not thread-safe
+    for (unsigned int i = 0; i < particles.N; ++i)
     {
-        indexsp.Insert( glm::vec3( particle.pos, 0.0f ), &particle );
+        //!\\ Insert includes discretization, hash function evaluation and list realloc
+        indexsp.Insert( glm::vec3( particles.positions[i].pos, 0.0f ), &particles.meta[i].id );
     }
+
 
     // DENSITY
     // Calculate the density by basically making a weighted sum
     // of the distances of neighboring particles within the radius of support (r)
 #pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
+    for( int i = 0; i < (int)particles.N; ++i )
     {
-        particles[i].rho = 0;
-        particles[i].rho_near = 0;
+        particles.meta[i].rho = 0;
+        particles.meta[i].rho_near = 0;
 
         // We will sum up the 'near' and 'far' densities.
         float d = 0;
         float dn = 0;
 
-        IndexType::NeighborList neigh;
-        neigh.reserve( 64 );
-        indexsp.Neighbors( glm::vec3( particles[i].pos, 0.0f ), neigh );
-        for( int j = 0; j < (int)neigh.size(); ++j )
+        std::vector<unsigned int*> neighIds;
+        neighIds.reserve( 64 );
+        indexsp.Neighbors( glm::vec3( particles.positions[i].pos, 0.0f ), neighIds );
+        for( int j = 0; j < (int)neighIds.size(); ++j )
         {
-            if( neigh[j] == &particles[i] )
+            if( *neighIds[j] == particles.meta[i].id )
             {
                 // do not calculate an interaction for a Particle with itself!
                 continue;
             }
 
             // The vector seperating the two particles
-            const glm::vec2 rij = neigh[j]->pos - particles[i].pos;
+            const glm::vec2 rij = particles.positions[*neighIds[j]].pos - particles.positions[i].pos;
 
             // Along with the squared distance between
             const float rij_len2 = glm::dot( rij, rij );
@@ -307,50 +362,56 @@ void step()
 
                 // Set up the Neighbor list for faster access later.
                 Neighbor n;
-                n.j = neigh[j];
+                n.id = *neighIds[j];
                 n.q = q;
                 n.q2 = q2;
-                particles[i].neighbors.push_back(n);
+                particles.meta[i].neighbors = (Neighbor*)realloc(
+                    particles.meta[i].neighbors, 
+                    (particles.meta[i].neighbor_count + 1) * sizeof(Neighbor));
+                particles.meta[i].neighbors[particles.meta[i].neighbor_count] = n;
+                particles.meta[i].neighbor_count++;
             }
         }
 
-        particles[i].rho += d;
-        particles[i].rho_near += dn;
+        particles.meta[i].rho += d;
+        particles.meta[i].rho_near += dn;
     }
 
     // PRESSURE
     // Make the simple pressure calculation from the equation of state.
 #pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
+    for( int i = 0; i < (int)particles.N; ++i )
     {
-        particles[i].press = k * ( particles[i].rho - rest_density );
-        particles[i].press_near = k_near * particles[i].rho_near;
+        particles.meta[i].press = k * ( particles.meta[i].rho - rest_density );
+        particles.meta[i].press_near = k_near * particles.meta[i].rho_near;
     }
 
     // PRESSURE FORCE
     // We will force particles in or out from their neighbors
     // based on their difference from the rest density.
 #pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
+    for( int i = 0; i < (int)particles.N; ++i )
     {
         // For each of the neighbors
         glm::vec2 dX( 0 );
-        for( const Neighbor& n : particles[i].neighbors )
+        for( size_t j = 0; j < particles.meta[i].neighbor_count; j++ )
         {
+            const Neighbor& n_j = particles.meta[i].neighbors[j];
+
             // The vector from Particle i to Particle j
-            const glm::vec2 rij = (*n.j).pos - particles[i].pos;
+            const glm::vec2 rij = particles.positions[n_j.id].pos - particles.positions[i].pos;
 
             // calculate the force from the pressures calculated above
             const float dm
-                = n.q * ( particles[i].press + (*n.j).press )
-				+ n.q2 * ( particles[i].press_near + (*n.j).press_near );
+                = n_j.q * ( particles.meta[i].press + particles.meta[n_j.id].press )
+				+ n_j.q2 * ( particles.meta[i].press_near + particles.meta[n_j.id].press_near );
 
             // Get the direction of the force
             const glm::vec2 D = glm::normalize( rij ) * dm;
             dX += D;
         }
 
-        particles[i].force -= dX;
+        particles.meta[i].force -= dX;
     }
 
     // VISCOSITY
@@ -359,37 +420,39 @@ void step()
     // surface tension will give a smooth appearance on their own.
     // Try it.
 #pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
+    for( int i = 0; i < (int)particles.N; ++i )
     {
         // We'll let the color be determined by
         // ... x-velocity for the red component
         // ... y-velocity for the green-component
         // ... pressure for the blue component
-        particles[i].r = 0.3f + (20 * fabs(particles[i].vel.x) );
-        particles[i].g = 0.3f + (20 * fabs(particles[i].vel.y) );
-        particles[i].b = 0.3f + (0.1f * particles[i].rho );
+        particles.meta[i].r = 0.3f + (20 * fabs(particles.meta[i].vel.x) );
+        particles.meta[i].g = 0.3f + (20 * fabs(particles.meta[i].vel.y) );
+        particles.meta[i].b = 0.3f + (0.1f * particles.meta[i].rho );
 
         // For each of that particles neighbors
-        for( const Neighbor& n : particles[i].neighbors )
+        for (size_t j = 0; j < particles.meta[i].neighbor_count; j++)
         {
-            const glm::vec2 rij = (*n.j).pos - particles[i].pos;
+            const Neighbor& n_j = particles.meta[i].neighbors[j];
+
+            const glm::vec2 rij = particles.positions[n_j.id].pos - particles.positions[i].pos;
             const float l = glm::length( rij );
             const float q = l / r;
 
             const glm::vec2 rijn = ( rij / l );
             // Get the projection of the velocities onto the vector between them.
-            const float u = glm::dot( particles[i].vel - (*n.j).vel, rijn );
+            const float u = glm::dot( particles.meta[i].vel - particles.meta[n_j.id].vel, rijn );
             if( u > 0 )
             {
                 // Calculate the viscosity impulse between the two particles
                 // based on the quadratic function of projected length.
                 const glm::vec2 I
                     = ( 1 - q )
-                    * ( (*n.j).sigma * u + (*n.j).beta * u * u )
+                    * (particles.meta[n_j.id].sigma * u + particles.meta[n_j.id].beta * u * u )
                     * rijn;
 
                 // Apply the impulses on the current particle
-                particles[i].vel -= I * 0.5f;
+                particles.meta[i].vel -= I * 0.5f;
             }
         }
     }
@@ -399,100 +462,96 @@ void step()
 
 
 // --------------------------------------------------------------------
-int main( int argc, char** argv )
+int main(int argc, char** argv)
 {
 #if 0
     const int steps = 3000;
     std::cout << "--------------------------------" << std::endl;
-    std::cout  << "Number of steps: " << steps << std::endl;
-    for( unsigned int size = 10; size <= 13; ++size )
+    std::cout << "Number of steps: " << steps << std::endl;
+    for (unsigned int size = 10; size <= 13; ++size)
     {
-        const unsigned int count = ( 1 << size );
+        const unsigned int count = (1 << size);
         std::cout << "Number of particles: " << count << std::endl;
 
-        init( count );
+        init(count);
 
         const auto beg = std::chrono::high_resolution_clock::now();
-        for( unsigned int i = 0; i < steps; ++i )
+        for (unsigned int i = 0; i < steps; ++i)
         {
             step();
         }
         const auto end = std::chrono::high_resolution_clock::now();
 
-        const auto duration( end - beg );
-        std::cout << "Elapsed time: " << std::chrono::duration_cast< std::chrono::milliseconds >( duration ).count() << " milliseconds" << std::endl;
-        std::cout << "Microseconds per step: " << std::chrono::duration_cast< std::chrono::microseconds >( duration ).count() / (double)steps << std::endl;
+        const auto duration(end - beg);
+        std::cout << "Elapsed time: " << std::chrono::duration_cast<std::chrono::milliseconds>(duration).count() << " milliseconds" << std::endl;
+        std::cout << "Microseconds per step: " << std::chrono::duration_cast<std::chrono::microseconds>(duration).count() / (double)steps << std::endl;
         std::cout << std::endl;
     }
 
     return 0;
 #else
 
-	//TODO Can we simulate porous materials like sand or soil with this? Which parameters have to be altered?
+    //TODO Can we simulate porous materials like sand or soil with this? Which parameters have to be altered?
 
-	//TODO Try solid material with very strong springs forces. Then implement melting.
+    //TODO Try solid material with very strong springs forces. Then implement melting.
 
-	//TODO Timeline seeking (use ImgGUI)
-
-
+    //TODO Timeline seeking (use ImgGUI)
 
 
-	//TODO after curvature flow: attempt to draw a line around silhouette, i.e. level set boundary
 
-    init( 2048 );
 
-	uint64_t gdiContext, glContext;
-	createGLContexts(&gdiContext, &glContext);
+    //TODO after curvature flow: attempt to draw a line around silhouette, i.e. level set boundary
 
-	char cwd[256];
-	_getcwd(cwd, 256);
-	int width, height, bpp;
-	unsigned char* rgb = stbi_load((std::string(cwd) + "/../img/cobble.jpg").c_str(), &width, &height, &bpp, 3);
-	assert(rgb);
-	unsigned int img = 0; createGLImage(width, height, &img, rgb, 3);
-	stbi_image_free(rgb);
+    init(200);
 
-	float proj[4][4]{ { 1.f / SIM_W, 0, 0, 0 }, { 0, 1.f / SIM_W, 0, -1.f }, { 0, 0, 1.f, 0 }, { 0, 0, 0, 1.f } };
-	pushGLView(&proj[0][0]);
+    uint64_t gdiContext, glContext;
+    createGLContexts(&gdiContext, &glContext);
 
-	GLVertexHandle verts;
-	createGLPoints2D(particles.size() * sizeof(Particle), &verts, particles.data(), sizeof(Particle));
+    char cwd[256];
+    _getcwd(cwd, 256);
+    int width, height, bpp;
+    unsigned char* rgb = stbi_load((std::string(cwd) + "/../img/cobble.jpg").c_str(), &width, &height, &bpp, 3);
+    assert(rgb);
+    unsigned int img = 0; createGLImage(width, height, &img, rgb, 3);
+    stbi_image_free(rgb);
 
-	pushGLView();
+    float proj[4][4]{ { 1.f / SIM_W, 0, 0, 0 }, { 0, 1.f / SIM_W, 0, -1.f }, { 0, 0, 1.f, 0 }, { 0, 0, 0, 1.f } };
+    pushGLView(&proj[0][0]);
 
-	createGLQuad();
+    GLVertexHandle verts;
+    createGLPoints2D(particles.N * sizeof(Particles::Position), &verts, particles.positions);
 
-	pushGLView();
 
-	createGLQuad();
+    float curvatureFlowFactor = .001f; ;
 
-	float curvatureFlowFactor = .001f; ;
+    openGLWindowAndREPL();
+    unsigned int mouse[2]; bool mouseDown; char pressedKey;
+    while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
 
-	openGLWindowAndREPL();
-	unsigned int mouse[2]; bool mouseDown; char pressedKey;
-	while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
-		
-		unsigned int window[2]; getGLWindowSize(window);
+        unsigned int window[2]; getGLWindowSize(window);
 
-		//printf("mouse=%d,%d   mouseDown=%d   pressedKey=%c\n\n", mouse[0], mouse[1], mouseDown, pressedKey);
-		if (attracting = mouseDown) {
-			float relx = (float)((int)mouse[0] - (int)window[0] / 2) / (int)window[0];
-			float rely = -(float)((int)mouse[1] - (int)window[1]) / (int)window[1];
-			attractor = glm::vec2(relx*SIM_W * 2, rely*SIM_W * 2);
-		} else {
-			attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
-		}
+        //printf("mouse=%d,%d   mouseDown=%d   pressedKey=%c\n\n", mouse[0], mouse[1], mouseDown, pressedKey);
+        if (attracting = mouseDown) {
+            float relx = (float)((int)mouse[0] - (int)window[0] / 2) / (int)window[0];
+            float rely = -(float)((int)mouse[1] - (int)window[1]) / (int)window[1];
+            attractor = glm::vec2(relx*SIM_W * 2, rely*SIM_W * 2);
+        }
+        else {
+            attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
+        }
 
-		runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor, .0f, .01f });
+        runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor, .0f, .01f });
 
-		step();
+        step();
 
-		updateGLVertexData(verts, particles.size() * sizeof(Particle), particles.data());
+        updateGLVertexData(verts, particles.N * sizeof(Particles::Position), particles.positions);
 
-		swapGLBuffers(60);
+        swapGLBuffers(60);
 
-	}
-	closeGLWindowAndREPL();
+    }
+    closeGLWindowAndREPL();
+
+    shutdown();
     return 0;
 #endif
 }
