@@ -75,11 +75,11 @@ static const std::string GLSL_VERSION_STRING_ = "#version 430\n";
 
 // Holds constant vertex shader source
 static const std::string VERTEX_SHADER_SRC_ = GLSL_VERSION_STRING_ +
-"layout(location = 0) in vec2 pos;\
+"layout(location = 0) in vec3 pos;\
 layout(location=42) uniform mat4 PROJ = mat4(1);\
-out vec2 p;\
+out vec3 p;\
 void main() {\
-	gl_Position = PROJ * vec4(pos, 0, 1);\
+	gl_Position = PROJ * vec4(pos, 1);\
 	p = pos;\
 }";
 
@@ -104,6 +104,7 @@ static float pointSize_ = 40.f;
 * The idea is that each view depends on the underlying view to build its frame.
 * Therefore when viewing the top most image, the whole stack is rendered from bottom up step by step using offscreen framebuffers.
 * Simple use case: Use pushGLView() followed by createGLQuad() to postprocess underlying view in shader of new view.
+* Note: Painter-style layering is currently not intended and framebuffer is cleared before new view is rendered.
 */
 struct ViewState {
 	GLuint vao_ = 0;
@@ -124,11 +125,11 @@ layout(location=45) uniform float DELTA_T = 0.005;\n";
 
 	// Holds fragment shader code, that can be extended via input at runtime
 	std::string fragmentShaderSource_ =
-"in vec2 p;\n\
+"in vec3 p;\n\
 out vec4 color;\n\
 int i; float f;\n\
 void main() {\n\
-  color = vec4(p, 0, 1);\n";
+  color = vec4(p, 1);\n";
 
 	// Holds a copy of the above after input was made, gets written back when successfully compiled
 	std::string fragmentShaderSourceTmp_;
@@ -986,7 +987,8 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 	v->fragmentShaderSource_ += "  float mag = dot(normal.xy, normal.xy);\n";
 	v->fragmentShaderSource_ += "  if (mag > 1.0) discard; // kill pixels outside circle\n";
 	v->fragmentShaderSource_ += "  normal.z = sqrt(1.0 - mag);\n";
-	v->fragmentShaderSource_ += "  color = vec4( vec3( dot(normalize(normal), vec3(0,0,1)) ), 1.0 );\n";
+	v->fragmentShaderSource_ += "  if (p.z > .5) color = vec4( dot(normalize(normal), vec3(0,0,1)), .0, .0, 1. );\n";
+    v->fragmentShaderSource_ += "  else color = vec4( vec3( dot(normalize(normal), vec3(0,0,1)) ), 1. );\n";
 	v->fragmentShaderSource_ += "  gl_FragDepth = (1.0-normal.z) * POINT_SIZE * .5;\n";
 
 	GLuint vao = 0;
@@ -998,15 +1000,15 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	glBufferData(GL_ARRAY_BUFFER, bytes, data, GL_STATIC_DRAW);
 
-	// Assume every vertex is 2 floats and no extra data
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, stride, 0);
+	// Assume every vertex is 3 floats and no extra data
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, 0);
 	glEnableVertexAttribArray(0);
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindVertexArray(0);
 
 	if (stride) v->currentVertexCount_ = (GLsizei)bytes / stride;
-	else v->currentVertexCount_ = (GLsizei)bytes / (2 * sizeof(float));
+	else v->currentVertexCount_ = (GLsizei)bytes / (3 * sizeof(float));
 
 	v->currentPrimitive_ = GL_POINTS;
 	glPointSize(pointSize_);
@@ -1113,7 +1115,7 @@ void createGLImage(int w, int h, void* outImageHandle, void* data, int channels)
 	const std::string countStr = std::to_string(imageCount_);
 	const std::string name = "img" + countStr;
 	v->glslUniformString_ += "layout(location = " + countStr + ") uniform sampler2D " + name + ";\n";
-	v->fragmentShaderSource_ += "  color = texture(" + name + ", (p+1.)*.5);\n";
+	v->fragmentShaderSource_ += "  color = texture(" + name + ", (p.xy+1.)*.5);\n";
 
 	GLuint tex;
 	GL(GenTextures, 1, &tex);

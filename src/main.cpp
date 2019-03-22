@@ -21,7 +21,11 @@
 
 // --------------------------------------------------------------------
 
+#define MATERIAL_DEFAULT 0
 #define MATERIAL_SNOW 1
+#define MATERIAL_SLIME 2
+
+#define CURRENT_MATERIAL MATERIAL_DEFAULT
 
 // --------------------------------------------------------------------
 
@@ -54,6 +58,7 @@ struct Particles
 {
     struct Position {
         glm::vec2 pos;
+        float a = .0f; // used to mark neighborhood
     };
     struct Meta {
 
@@ -61,10 +66,12 @@ struct Particles
 
         float r, g, b; // debug color
 
+        //glm::mat2 G; //TODO anisotropy matrix
+
         glm::vec2 pos_old; // for verlet?
         glm::vec2 vel;
         glm::vec2 force;
-        float mass;
+        float mass; // never used
         float rho; // density
         float rho_near; // ?
         float press;
@@ -84,26 +91,44 @@ struct Particles
 struct Neighbor
 {
     unsigned int id;
-    float q, q2;
+    float q, q2; // result and squared result of kernel estimation 1 - ( r_ij / r_max )
 };
 
 // Our collection of particles
 Particles particles;
 
-//TODO implement SOA access
+//TODO
 //     load positions to GPU
 //     do metaballs, other distance fields, Parzen window, ellipses with PCA...
+//     problem: these methods do weighted sums over ALL particles to determine smooth contributions at each pixel
 
 // --------------------------------------------------------------------
 const float G = .02f * .25;           // Gravitational Constant for our simulation
 const float spacing = 2.f;            // Spacing of particles
+#if CURRENT_MATERIAL == MATERIAL_DEFAULT
 const float k = spacing / 1000.0f;    // Far pressure weight
 const float k_near = k * 10;          // Near pressure weight
 const float rest_density = 3;         // Rest Density
+#elif CURRENT_MATERIAL == MATERIAL_SLIME
+const float k = spacing / 100.0f;    // Far pressure weight
+const float k_near = k * 1;          // Near pressure weight
+const float rest_density = 3;         // Rest Density
+#elif CURRENT_MATERIAL == MATERIAL_SNOW //TODO still to bouncy...
+const float k = spacing / 1000.0f;    // Far pressure weight
+const float k_near = k * 10;          // Near pressure weight
+const float rest_density = 10;         // Rest Density
+#endif
 const float r = spacing * 1.25f;      // Radius of Support
 const float rsq = r * r;              // ... squared for performance stuff
 const float SIM_W = 50;               // The size of the world
 const float bottom = 0;               // The floor of the world
+
+/*
+Radius of support r determines the region of neighbors to be considered for smoothing.
+Smoothing kernel W maps radii r_ij to weights q, so that forces are stronger when particles are nearer.
+The kernel uses r to let q drop to zero after a finite support.
+This helps to restrict computation to few neighbors, but note that a fixed number cannot be given.
+*/
 
 // --------------------------------------------------------------------
 void init( const unsigned int N )
@@ -150,10 +175,10 @@ void init( const unsigned int N )
 }
 
 void shutdown() {
-    /*free(particles.positions);
-    free(particles.meta);
     for (unsigned int i = 0; i < particles.N; i++)
-        free(particles.meta[i].neighbors);*/
+        free(particles.meta[i].neighbors);
+    free(particles.meta);
+    free(particles.positions);
 }
 
 // Mouse attractor
@@ -491,9 +516,9 @@ int main(int argc, char** argv)
     return 0;
 #else
 
-    //TODO Can we simulate porous materials like sand or soil with this? Which parameters have to be altered?
+    //TODO Sand, soil, snow (strong cohesion, high rest density, weak spring forces)
 
-    //TODO Try solid material with very strong springs forces. Then implement melting.
+    //TODO Try solid material with very strong (?) springs forces. Then implement melting.
 
     //TODO Timeline seeking (use ImgGUI)
 
@@ -526,18 +551,30 @@ int main(int argc, char** argv)
 
     openGLWindowAndREPL();
     unsigned int mouse[2]; bool mouseDown; char pressedKey;
+    std::vector<unsigned int*> lastNeighIds;
     while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
 
         unsigned int window[2]; getGLWindowSize(window);
 
         //printf("mouse=%d,%d   mouseDown=%d   pressedKey=%c\n\n", mouse[0], mouse[1], mouseDown, pressedKey);
-        if (attracting = mouseDown) {
+        {
             float relx = (float)((int)mouse[0] - (int)window[0] / 2) / (int)window[0];
             float rely = -(float)((int)mouse[1] - (int)window[1]) / (int)window[1];
-            attractor = glm::vec2(relx*SIM_W * 2, rely*SIM_W * 2);
-        }
-        else {
-            attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
+            const auto projMouse = glm::vec2(relx*SIM_W * 2, rely*SIM_W * 2);
+            if (attracting = mouseDown) {
+                attractor = projMouse;
+            }
+            else {
+                attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
+
+                // mark neighborhood
+                std::vector<unsigned int*> neighIds;
+                neighIds.reserve(64);
+                indexsp.Neighbors(glm::vec3(projMouse, 0.0f), neighIds);
+                for (const auto i : lastNeighIds) particles.positions[*i].a = 0.f;
+                for (const auto i : neighIds) particles.positions[*i].a = 1.f;
+                lastNeighIds = neighIds;
+            }
         }
 
         runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor, .0f, .01f });
