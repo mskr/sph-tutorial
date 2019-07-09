@@ -97,6 +97,8 @@ static unsigned int imageCount_ = 0;
 
 static float pointSize_ = 40.f;
 
+float lightSource_[3] = { 0 };
+
 /**
 * ViewState is an internal management structure to enable multiple views in the GL window.
 * Views can be switched with PAGE[UP/DOWN] keys. This will also change the current shader in the console.
@@ -121,7 +123,8 @@ struct ViewState {
 "layout(location=42) uniform mat4 PROJ = mat4(1);\n\
 layout(location=43) uniform vec2 PX_SIZE;\n\
 layout(location=44) uniform float POINT_SIZE;\n\
-layout(location=45) uniform float DELTA_T = 0.005;\n";
+layout(location=45) uniform float DELTA_T = 0.005;\n\
+layout(location=46) uniform vec3 L = vec3(0, 0, 1);\n";
 
 	// Holds fragment shader code, that can be extended via input at runtime
 	std::string fragmentShaderSource_ =
@@ -988,7 +991,7 @@ void createGLPoints2D(size_t bytes, GLVertexHandle* outHandle, void* data, int s
 	v->fragmentShaderSource_ += "  if (mag > 1.0) discard; // kill pixels outside circle\n";
 	v->fragmentShaderSource_ += "  normal.z = sqrt(1.0 - mag);\n";
 	v->fragmentShaderSource_ += "  if (p.z > .5) color = vec4( dot(normalize(normal), vec3(0,0,1)), .0, .0, 1. );\n";
-    v->fragmentShaderSource_ += "  else color = vec4( vec3( dot(normalize(normal), vec3(0,0,1)) ), 1. );\n";
+    v->fragmentShaderSource_ += "  else color = vec4( vec3( dot(normalize(normal), normalize(L) )), 1. );\n";
 	v->fragmentShaderSource_ += "  gl_FragDepth = (1.0-normal.z) * POINT_SIZE * .5;\n";
 
 	GLuint vao = 0;
@@ -1219,6 +1222,10 @@ static void runGLShader_internal(unsigned int viewIdx, float* uniformSlot1, floa
 	glUniform1f(45, (float)frameTime_.count() / 1000.f);
 	glGetError();
 
+    // Light source
+    glUniform3f(46, lightSource_[0], lightSource_[1], lightSource_[2]);
+    glGetError();
+
 	// Other parameters
 	if (uniformSlot1) glUniform1f(142, *uniformSlot1);
 	glGetError();
@@ -1318,7 +1325,7 @@ void runGLShader(GLShaderParam slot1, GLShaderParam slot2, GLShaderParam slot3) 
 			ImGui::DragFloat("", &pointSize_, 1.f, 5.f, 50.f);
 			ImGui::EndMenu();
 		}
-		if (ImGui::BeginMenu("Num Passes")) { // TODO other mechanism to make per-view settings
+		if (ImGui::BeginMenu("View Passes")) { // TODO other mechanism to make per-view settings
 			ImGui::SliderInt("", &viewStates_[activeView_].numPasses_, 1, 10);
 			ImGui::EndMenu();
 		}
@@ -1476,6 +1483,9 @@ void closeGLWindowAndREPL() {
 
 	glDeleteVertexArrays(1, &v->vao_);
 
+    //TODO how can we tell if we actually leave garbage behind,
+    // if we dont clean up all GL objects?
+
 	// make the rendering context not current before deleting it
 	wglMakeCurrent(NULL, NULL);
 	wglDeleteContext(glRenderContext_);
@@ -1487,6 +1497,10 @@ void closeGLWindowAndREPL() {
 void getGLWindowSize(unsigned int* s) {
 	s[0] = width_;
 	s[1] = height_;
+}
+
+void updateGLLightSource(float x, float y, float z) {
+    lightSource_[0] = x; lightSource_[1] = y; lightSource_[2] = z;
 }
 
 

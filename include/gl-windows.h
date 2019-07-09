@@ -78,3 +78,5 @@ void getGLWindowSize(unsigned int* s);
 *
 */
 void pushGLView(float* proj = 0);
+
+void updateGLLightSource(float x, float y, float z);
