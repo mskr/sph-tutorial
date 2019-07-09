@@ -76,8 +76,8 @@ struct Particles
         float rho_near; // ?
         float press;
         float press_near;
-        float sigma; // ?
-        float beta; // ?
+        float sigma; // linear viscosity coefficient
+        float beta; // quadratic viscosity coefficient
 
         Neighbor* neighbors; // current neighbors found via spatial hashing and cleared when particle moves
         size_t neighbor_count;
@@ -129,6 +129,13 @@ Smoothing kernel W maps radii r_ij to weights q, so that forces are stronger whe
 The kernel uses r to let q drop to zero after a finite support.
 This helps to restrict computation to few neighbors, but note that a fixed number cannot be given.
 */
+
+// SPH kernel function, sometimes abbreviated W
+// Takes radial distance r and support radius h
+// Returns influence of two points on each other
+float kernel(float r, float h) {
+    return 1 - (r / h);
+}
 
 // --------------------------------------------------------------------
 void init( const unsigned int N )
@@ -378,7 +385,7 @@ void step()
                 float rij_len = sqrt( rij_len2 );
 
                 // And calculated the weighted distance values
-                const float q = 1 - ( rij_len / r );
+                const float q = kernel(rij_len, r);
                 const float q2 = q * q;
                 const float q3 = q2 * q;
 
@@ -519,6 +526,7 @@ int main(int argc, char** argv)
     //TODO Sand, soil, snow (strong cohesion, high rest density, weak spring forces)
 
     //TODO Try solid material with very strong (?) springs forces. Then implement melting.
+    // (https://graphics.ethz.ch/~sobarbar/papers/Sol07b/Sol07b.pdf)
 
     //TODO Timeline seeking (use ImgGUI)
 
@@ -545,13 +553,28 @@ int main(int argc, char** argv)
 
     GLVertexHandle verts;
     createGLPoints2D(particles.N * sizeof(Particles::Position), &verts, particles.positions);
+    /*
+    Generate quads from particle positions (tri strip with 4 vertices)
+    Each quad contains
+     - local uv coordinate system to render spherical normals and depth
+     - list of neighbor indices (into position buffer that is always on GPU)
+       (similar to connecting vertices to bones in skeletal animation)
+     (- non-uniform xy scaling based on principal components)
+     Splatting: http://www.cs.rug.nl/~roe/courses/acg/rendering
+    */
+
+    pushGLView(); createGLQuad();
+    pushGLView(); createGLQuad();
 
 
     float curvatureFlowFactor = .001f; ;
 
-    openGLWindowAndREPL();
-    unsigned int mouse[2]; bool mouseDown; char pressedKey;
     std::vector<unsigned int*> lastNeighIds;
+
+    openGLWindowAndREPL();
+
+    unsigned int mouse[2]; bool mouseDown; char pressedKey;
+
     while (processWindowsMessage(mouse, &mouseDown, &pressedKey)) {
 
         unsigned int window[2]; getGLWindowSize(window);
@@ -575,6 +598,7 @@ int main(int argc, char** argv)
                 for (const auto i : neighIds) particles.positions[*i].a = 1.f;
                 lastNeighIds = neighIds;
             }
+            updateGLLightSource(relx, rely, .5f);
         }
 
         runGLShader(GLShaderParam{ "curvatureFlowFactor", &curvatureFlowFactor, .0f, .01f });
