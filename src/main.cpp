@@ -411,6 +411,13 @@ void step()
 
     // PRESSURE
     // Make the simple pressure calculation from the equation of state.
+    // Compressibility issues come into play here.
+    // Approaches:
+    // Divergence-free SPH: compute k based on individual neighborhoods
+    // PBF: position based
+    // IISPH: implicit ISPH
+    // WCSPH: weakly compressible
+    // ISPH: icompressibile by doing "pressure projection"
 #pragma omp parallel for
     for( int i = 0; i < (int)particles.N; ++i )
     {
