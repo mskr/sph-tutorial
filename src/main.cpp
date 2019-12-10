@@ -2,6 +2,43 @@
 // Brandon Pelfrey
 // SPH Fluid Simulation
 
+// Forked by Marius Kircher.
+/* Devlog *                                                          *|
+To understand SPH it really helped to imagine myself as a particle.
+I have a history of previous and future positions.
+Thinking, as well as executing code to move, takes time.
+The space around me cannot easily be seen.
+To know how I move, I need to know which particles influence me.
+This means searching nearest neighbors.
+In a fluid, neighbors are not fixed.
+Therefore the search has to be done again and again.
+However, in the sense of a heuristic, I can keep my neighbors from
+last time, to have a starting set, from which to find neighbors faster.
+Note that there is theoretically no maximum of neighbors in a radius.
+An extreme of the heuristic would be when every particle stores all
+other particles sorted by smallest-distance-first.
+Another "short-cut" for the search was already implemented by Brandon.
+It is hashing and it maps
+1. positions in space
+2. to cells on a grid
+3. to an index in an array.
+The array elements contain lists of particles at that space cell.
+Aside, spheres would be better than cells, because of my search radius,
+but spheres are harder to map to. Also they cannot fill space efficiently.
+In any case, when matching cell size with radius, I only need to consider
+a few cells (e.g. 1 or 9) and ignore the rest - that's the shortcut.
+Trouble comes, when particles move and the grid must be updated.
+Brandon throws away everything and pushes each particle in its cell again.
+I feel that there must be a better way - keeping history.
+My heuristic still needs to look at all particles, except
+I add the assumption, that far particles from last time cannot have come
+near by now. In other words I impose a velocity limit.
+This could be connected to the speed of sound, hmm.
+To be continued...
+*/
+
+
+
 #include <glm/glm.hpp>
 #include <omp.h>
 
@@ -79,7 +116,13 @@ struct Particles
         float sigma; // linear viscosity coefficient
         float beta; // quadratic viscosity coefficient
 
-        Neighbor* neighbors; // current neighbors found via spatial hashing and cleared when particle moves
+        // current neighbors 
+        // found via spatial hashing
+        // cleared when particle moves
+        //TODO try storing another array of all particles here,
+        // sorted by distance to this particle, 
+        // incrementally re-sort similar to sweep'n'prune
+        Neighbor* neighbors;
         size_t neighbor_count;
     };
     Position* positions;
@@ -90,7 +133,7 @@ struct Particles
 // A structure for holding two neighboring particles and their weighted distances
 struct Neighbor
 {
-    unsigned int id;
+    unsigned int id; // index into data arrays
     float q, q2; // result and squared result of kernel estimation 1 - ( r_ij / r_max )
 };
 
@@ -118,7 +161,7 @@ const float k = spacing / 1000.0f;    // Far pressure weight
 const float k_near = k * 10;          // Near pressure weight
 const float rest_density = 10;         // Rest Density
 #endif
-const float r = spacing * 1.25f;      // Radius of Support
+const float r = spacing * 10.25f;      // Radius of Support
 const float rsq = r * r;              // ... squared for performance stuff
 const float SIM_W = 50;               // The size of the world
 const float bottom = 0;               // The floor of the world
@@ -333,20 +376,25 @@ void step()
         particles.meta[i].neighbor_count = 0;
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
-    // update spatial index
-    // ====================
+    // SPATIAL INDEX
 
-    //TODO investigate incremental update and if applicable measure perf gain
+    // Throw away all previous neighbor information
     indexsp.Clear();
+    //TODO investigate incremental update and if applicable measure perf gain
 
     // Sequential iteration since the hash map is not thread-safe
     for (unsigned int i = 0; i < particles.N; ++i)
     {
-        //!\\ Insert includes discretization, hash function evaluation and list realloc
+        // Insert includes 
+        // 1. discretization (3x div by grid step),
+        // 2. hash function evaluation (ivec3 to int) and 
+        // 3. list realloc
         indexsp.Insert( glm::vec3( particles.positions[i].pos, 0.0f ), &particles.meta[i].id );
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // DENSITY
     // Calculate the density by basically making a weighted sum
@@ -409,12 +457,14 @@ void step()
         particles.meta[i].rho_near += dn;
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
     // PRESSURE
     // Make the simple pressure calculation from the equation of state.
     // Compressibility issues come into play here.
     // Approaches:
     // Divergence-free SPH: compute k based on individual neighborhoods
-    // PBF: position based
+    // PBF: position based constraint equation
     // IISPH: implicit ISPH
     // WCSPH: weakly compressible
     // ISPH: icompressibile by doing "pressure projection"
@@ -532,7 +582,9 @@ int main(int argc, char** argv)
 
     //TODO Sand, soil, snow (strong cohesion, high rest density, weak spring forces)
 
-    //TODO Try solid material with very strong (?) springs forces. Then implement melting.
+    //TODO Try solid material with very strong springs forces.
+    // Then implement control to transition between fluid and solid phases.
+    // (Sculpting with fluid to solid jamming)
     // (https://graphics.ethz.ch/~sobarbar/papers/Sol07b/Sol07b.pdf)
 
     //TODO Timeline seeking (use ImgGUI)
