@@ -22,19 +22,22 @@ It is hashing and it maps
 1. positions in space
 2. to cells on a grid
 3. to an index in an array.
-The array elements contain lists of particles at that space cell.
+The array elements are lists of particles at that space cell.
 Aside, spheres would be better than cells, because of my search radius,
 but spheres are harder to map to. Also they cannot fill space efficiently.
-In any case, when matching cell size with radius, I only need to consider
+Coming back to spatial hashing, when matching cell size with radius, I only need to consider
 a few cells (e.g. 1 or 9) and ignore the rest - that's the shortcut.
+An octree would do the same.
 Trouble comes, when particles move and the grid must be updated.
 Brandon throws away everything and pushes each particle in its cell again.
 I feel that there must be a better way - keeping history.
 My heuristic still needs to look at all particles, except
-I add the assumption, that far particles from last time cannot have come
+if I added the assumption, that far particles from last time cannot have come
 near by now. In other words I impose a velocity limit.
 This could be connected to the speed of sound, hmm.
 To be continued...
+What does the state of the art say?
+https://cgl.ethz.ch/Downloads/Publications/Papers/2019/Sol19b/Sol19b.pdf
 */
 
 
