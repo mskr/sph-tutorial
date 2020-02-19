@@ -2,6 +2,46 @@
 // Brandon Pelfrey
 // SPH Fluid Simulation
 
+// Forked by Marius Kircher.
+/* Devlog *                                                          *|
+To understand SPH it really helped to imagine myself as a particle.
+I have a history of previous and future positions.
+Thinking, as well as executing code to move, takes time.
+The space around me cannot easily be seen.
+To know how I move, I need to know which particles influence me.
+This means searching nearest neighbors.
+In a fluid, neighbors are not fixed.
+Therefore the search has to be done again and again.
+However, in the sense of a heuristic, I can keep my neighbors from
+last time, to have a starting set, from which to find neighbors faster.
+Note that there is theoretically no maximum of neighbors in a radius.
+An extreme of the heuristic would be when every particle stores all
+other particles sorted by smallest-distance-first.
+Another "short-cut" for the search was already implemented by Brandon.
+It is hashing and it maps
+1. positions in space
+2. to cells on a grid
+3. to an index in an array.
+The array elements are lists of particles at that space cell.
+Aside, spheres would be better than cells, because of my search radius,
+but spheres are harder to map to. Also they cannot fill space efficiently.
+Coming back to spatial hashing, when matching cell size with radius, I only need to consider
+a few cells (e.g. 1 or 9) and ignore the rest - that's the shortcut.
+An octree would do the same.
+Trouble comes, when particles move and the grid must be updated.
+Brandon throws away everything and pushes each particle in its cell again.
+I feel that there must be a better way - keeping history.
+My heuristic still needs to look at all particles, except
+if I added the assumption, that far particles from last time cannot have come
+near by now. In other words I impose a velocity limit.
+This could be connected to the speed of sound, hmm.
+To be continued...
+What does the state of the art say?
+https://cgl.ethz.ch/Downloads/Publications/Papers/2019/Sol19b/Sol19b.pdf
+*/
+
+
+
 #include <glm/glm.hpp>
 #include <omp.h>
 
@@ -339,20 +379,25 @@ void step()
         particles.meta[i].neighbor_count = 0;
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
-    // update spatial index
-    // ====================
+    // SPATIAL INDEX
 
-    //TODO investigate incremental update and if applicable measure perf gain
+    // Throw away all previous neighbor information
     indexsp.Clear();
+    //TODO investigate incremental update and if applicable measure perf gain
 
     // Sequential iteration since the hash map is not thread-safe
     for (unsigned int i = 0; i < particles.N; ++i)
     {
-        //!\\ Insert includes discretization, hash function evaluation and list realloc
+        // Insert includes 
+        // 1. discretization (3x div by grid step),
+        // 2. hash function evaluation (ivec3 to int) and 
+        // 3. list realloc
         indexsp.Insert( glm::vec3( particles.positions[i].pos, 0.0f ), &particles.meta[i].id );
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
 
     // DENSITY
     // Calculate the density by basically making a weighted sum
@@ -415,12 +460,14 @@ void step()
         particles.meta[i].rho_near += dn;
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////////////////
+
     // PRESSURE
     // Make the simple pressure calculation from the equation of state.
     // Compressibility issues come into play here.
     // Approaches:
     // Divergence-free SPH: compute k based on individual neighborhoods
-    // PBF: position based
+    // PBF: position based constraint equation
     // IISPH: implicit ISPH
     // WCSPH: weakly compressible
     // ISPH: icompressibile by doing "pressure projection"
