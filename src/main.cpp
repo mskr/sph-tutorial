@@ -79,7 +79,13 @@ struct Particles
         float sigma; // linear viscosity coefficient
         float beta; // quadratic viscosity coefficient
 
-        Neighbor* neighbors; // current neighbors found via spatial hashing and cleared when particle moves
+        // current neighbors 
+        // found via spatial hashing
+        // cleared when particle moves
+        //TODO try storing another array of all particles here,
+        // sorted by distance to this particle, 
+        // incrementally re-sort similar to sweep'n'prune
+        Neighbor* neighbors;
         size_t neighbor_count;
     };
     Position* positions;
@@ -90,7 +96,7 @@ struct Particles
 // A structure for holding two neighboring particles and their weighted distances
 struct Neighbor
 {
-    unsigned int id;
+    unsigned int id; // index into data arrays
     float q, q2; // result and squared result of kernel estimation 1 - ( r_ij / r_max )
 };
 
@@ -118,7 +124,7 @@ const float k = spacing / 1000.0f;    // Far pressure weight
 const float k_near = k * 10;          // Near pressure weight
 const float rest_density = 10;         // Rest Density
 #endif
-const float r = spacing * 1.25f;      // Radius of Support
+const float r = spacing * 10.25f;      // Radius of Support
 const float rsq = r * r;              // ... squared for performance stuff
 const float SIM_W = 50;               // The size of the world
 const float bottom = 0;               // The floor of the world
@@ -532,7 +538,9 @@ int main(int argc, char** argv)
 
     //TODO Sand, soil, snow (strong cohesion, high rest density, weak spring forces)
 
-    //TODO Try solid material with very strong (?) springs forces. Then implement melting.
+    //TODO Try solid material with very strong springs forces.
+    // Then implement control to transition between fluid and solid phases.
+    // (Sculpting with fluid to solid jamming)
     // (https://graphics.ethz.ch/~sobarbar/papers/Sol07b/Sol07b.pdf)
 
     //TODO Timeline seeking (use ImgGUI)
